@@ -24,7 +24,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
-      - run: pip install -r requirements.lock && pip install --no-deps -e . pytest pytest-asyncio
+      - run: pip install -r requirements.lock
+      - run: pip install --no-deps -e .
+      - run: pip install pytest pytest-asyncio
       - run: python -m pytest -q
         env:
           A2A_TEST_POSTGRES_URL: postgresql+asyncpg://postgres:test@localhost:5432/a2a
