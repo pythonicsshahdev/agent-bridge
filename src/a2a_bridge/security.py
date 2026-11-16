@@ -33,8 +33,10 @@ logger = logging.getLogger(__name__)
 audit_logger = logging.getLogger("a2a_bridge.audit")
 
 PUBLIC_SUFFIXES = ("/.well-known/agent-card.json", "/openapi.json")  # discovery documents, no secrets
-PUBLIC_PATHS = frozenset({"/healthz", "/readyz"})
+PUBLIC_PATHS = frozenset({"/healthz", "/readyz", "/admin", "/admin/", "/admin/app.js", "/admin/app.css"})  # the UI shell holds no data
 SCOPE_PREFIX = "agents:"
+ADMIN_SCOPE = "admin:*"
+ADMIN_PREFIX = "/admin"
 MAX_CREDENTIAL_CHARS = 8192
 
 
@@ -58,6 +60,11 @@ class Principal:
 
     def can_access(self, slug: str) -> bool:
         return f"{SCOPE_PREFIX}*" in self.scopes or f"{SCOPE_PREFIX}{slug}" in self.scopes
+
+    @property
+    def is_admin(self) -> bool:
+        """Admin is never implied by agent scopes; it must be granted explicitly."""
+        return ADMIN_SCOPE in self.scopes
 
 
 class PrincipalUser(BaseUser):
@@ -151,7 +158,7 @@ class JwtAuthenticator:
     def _scopes(self, claims: dict[str, Any]) -> list[str]:
         raw = claims.get(self._config.scope_claim, claims.get("scp", []))
         values = raw.split() if isinstance(raw, str) else [str(v) for v in raw] if isinstance(raw, list) else []
-        return [v for v in values if v.startswith(SCOPE_PREFIX)]
+        return [v for v in values if v.startswith(SCOPE_PREFIX) or v == ADMIN_SCOPE]
 
 
 class TokenBucket:
@@ -194,7 +201,13 @@ def _is_public(path: str) -> bool:
     return path in PUBLIC_PATHS or path.endswith(PUBLIC_SUFFIXES)
 
 
+def _is_admin_path(path: str) -> bool:
+    return path == ADMIN_PREFIX or path.startswith(ADMIN_PREFIX + "/")
+
+
 def _agent_slug(path: str, root_slug: str | None) -> str | None:
+    if _is_admin_path(path):
+        return None  # authorized by the admin scope, not an agent scope
     parts = path.strip("/").split("/")
     if len(parts) >= 2 and parts[0] == "agents":
         return parts[1]
@@ -232,6 +245,7 @@ class InboundAuthMiddleware:
         started = time.monotonic()
         request_id = uuid.uuid4().hex[:12]
         slug = _agent_slug(scope["path"], self.root_slug)
+        label = "admin" if _is_admin_path(scope["path"]) else slug  # what the audit log calls the target
         status = {"code": 0}
 
         async def send_logged(message: Message) -> None:
@@ -245,22 +259,26 @@ class InboundAuthMiddleware:
             principal = await self._authenticate(dict(scope["headers"]))
         except AuthError as exc:
             await self._reject(scope, receive, send_logged, 401, "authentication required", {"WWW-Authenticate": "Bearer"})
-            self._audit(request_id, None, slug, scope, status["code"], started, exc.reason)
+            self._audit(request_id, None, label, scope, status["code"], started, exc.reason)
             return
         except AuthUnavailable as exc:
             await self._reject(scope, receive, send_logged, 503, "identity provider unavailable", {"Retry-After": "5"})
-            self._audit(request_id, None, slug, scope, status["code"], started, str(exc))
+            self._audit(request_id, None, label, scope, status["code"], started, str(exc))
             return
 
+        if _is_admin_path(scope["path"]) and not principal.is_admin:
+            await self._reject(scope, receive, send_logged, 403, "admin scope required")
+            self._audit(request_id, principal, label, scope, status["code"], started, "admin scope denied")
+            return
         if slug is not None and not principal.can_access(slug):
             await self._reject(scope, receive, send_logged, 403, "not permitted for this agent")
-            self._audit(request_id, principal, slug, scope, status["code"], started, "scope denied")
+            self._audit(request_id, principal, label, scope, status["code"], started, "scope denied")
             return
         if self._limiter is not None:
             wait = self._limiter.take(principal.id)
             if wait > 0:
                 await self._reject(scope, receive, send_logged, 429, "rate limit exceeded", {"Retry-After": str(int(wait) + 1)})
-                self._audit(request_id, principal, slug, scope, status["code"], started, "rate limited")
+                self._audit(request_id, principal, label, scope, status["code"], started, "rate limited")
                 return
 
         scope["user"] = PrincipalUser(principal)
@@ -269,7 +287,7 @@ class InboundAuthMiddleware:
         length = dict(scope["headers"]).get(b"content-length")
         if length and length.isdigit() and int(length) > limit:
             await self._reject(scope, receive, send_logged, 413, "request too large")
-            self._audit(request_id, principal, slug, scope, status["code"], started, "body too large")
+            self._audit(request_id, principal, label, scope, status["code"], started, "body too large")
             return
 
         seen = 0
@@ -288,7 +306,7 @@ class InboundAuthMiddleware:
         except _BodyTooLarge:
             if not status["code"]:
                 await self._reject(scope, receive, send_logged, 413, "request too large")
-        self._audit(request_id, principal, slug, scope, status["code"], started, None)
+        self._audit(request_id, principal, label, scope, status["code"], started, None)
 
     async def _authenticate(self, headers: dict[bytes, bytes]) -> Principal:
         mode = self.auth.mode

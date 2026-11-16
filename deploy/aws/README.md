@@ -67,6 +67,10 @@ The container reads a flat JSON object of single-line values from `a2a-bridge/en
 | Backups | EBS: snapshot the data volume (Data Lifecycle Manager). RDS: automated backups are on (7 days) and deletion protection is enabled. |
 | Tear down a test stack | set `deletion_protection = false`, apply, then `terraform destroy` |
 
+## The control plane in production
+
+If you enable `server.admin`, the page and API are served by the same ALB listener as your agents. For an internet-facing ALB, add a WAF rule or listener rule that only allows `/admin*` from your office or VPN CIDRs, and keep the `admin:*` clients to a few people.
+
 ## Settings that matter
 
 - **ALB idle timeout is 330 seconds.** `/invoke` can wait up to 300 seconds for an agent. The ALB default of 60 would cut those calls off. Keep it above `server.facade.max_wait_seconds`.

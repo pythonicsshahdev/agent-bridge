@@ -31,6 +31,7 @@ def _check_http_url(value: str) -> str:
 
 
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
+_SENSITIVE_HEADER = re.compile(r"authorization|api[-_]?key|token|secret|password|cookie", re.IGNORECASE)
 _SLUG_OR_STAR = re.compile(r"^(\*|[a-z0-9][a-z0-9-]*)$")
 
 
@@ -63,8 +64,10 @@ class ClientConfig(_Model):
     @classmethod
     def _scopes(cls, v: list[str]) -> list[str]:
         for scope in v:
+            if scope == "admin:*":
+                continue
             if not scope.startswith("agents:") or not _SLUG_OR_STAR.match(scope.removeprefix("agents:")):
-                raise ValueError(f"scope '{scope}' must be 'agents:<slug>' or 'agents:*'")
+                raise ValueError(f"scope '{scope}' must be 'agents:<slug>', 'agents:*' or 'admin:*'")
         return v
 
 
@@ -119,6 +122,13 @@ class FacadeConfig(_Model):
     max_wait_seconds: float = Field(300, gt=0, le=900)
 
 
+class AdminConfig(_Model):
+    """Read-only control plane at /admin. Off by default; needs a client with the admin:* scope."""
+
+    enabled: bool = False
+    event_buffer: int = Field(500, ge=50, le=5000)  # recent requests kept in memory for the Events view
+
+
 class ServerConfig(_Model):
     host: str = "0.0.0.0"
     port: int = Field(8000, ge=1, le=65535)
@@ -130,6 +140,7 @@ class ServerConfig(_Model):
     public_base_url: str | None = None
     inbound_auth: InboundAuthConfig = Field(default_factory=InboundAuthConfig)
     facade: FacadeConfig = Field(default_factory=FacadeConfig)
+    admin: AdminConfig = Field(default_factory=AdminConfig)
 
     @field_validator("public_base_url")
     @classmethod
@@ -376,6 +387,11 @@ def _reject_literal_credentials(raw: Any) -> None:
         token = adapter.get("api_token")
         if adapter.get("type") == "agentstudio" and isinstance(token, str) and not _ENV_REF.search(token):
             raise ConfigError(f"agent '{agent.get('slug', '?')}': api_token must reference an environment variable, e.g. ${{BOOMI_API_TOKEN}}")
+        for name, header_value in (adapter.get("headers") or {}).items():
+            if _SENSITIVE_HEADER.search(str(name)) and isinstance(header_value, str) and not _ENV_REF.search(header_value):
+                raise ConfigError(
+                    f"agent '{agent.get('slug', '?')}': header '{name}' looks like a credential, so its value must reference an environment variable, e.g. ${{MY_KEY}}"
+                )
         auth = adapter.get("auth") or {}
         value = auth.get("value")
         if auth.get("mode") == "static_header" and isinstance(value, str) and not _ENV_REF.search(value):
@@ -395,6 +411,17 @@ def _reject_literal_remote_secrets(raw: dict) -> None:
                 )
 
 
+def describe_errors(exc: ValidationError) -> str:
+    """One line per problem, naming the field and the rule, never echoing the offending value
+    (it may be a pasted secret) and never including pydantic's documentation URLs."""
+    lines = []
+    for error in exc.errors(include_input=False, include_url=False, include_context=False):
+        where = ".".join(str(part) for part in error["loc"]) or "config"
+        message = error["msg"].removeprefix("Value error, ")
+        lines.append(f"{where}: {message}")
+    return "; ".join(lines)
+
+
 def parse_config(text: str, env: Mapping[str, str] | None = None) -> AppConfig:
     try:
         raw = yaml.safe_load(text)
@@ -407,7 +434,7 @@ def parse_config(text: str, env: Mapping[str, str] | None = None) -> AppConfig:
     try:
         return AppConfig.model_validate(expand_env(raw, env))
     except ValidationError as exc:
-        raise ConfigError(str(exc)) from exc
+        raise ConfigError(describe_errors(exc)) from exc
 
 
 def load_config(path: str | Path, env: Mapping[str, str] | None = None) -> AppConfig:

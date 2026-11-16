@@ -103,7 +103,7 @@ Execute these phases sequentially, verifying tests pass at each stage:
 **Goal:** Boomi agents can be *called by* any A2A client (inbound) AND *call* any A2A agent, including other Boomi agents (outbound). This extends the phases above; Phases 1-4 remain as written.
 
 ## Verified Environment Facts (check before relying on them)
-- Local Python is 3.9.6 and `pip` is not on PATH. The stack needs **3.11+**. Ask the user before installing Python or packages; use a venv (`python3.11 -m venv .venv`) once available.
+- Develop in the Python 3.14 venv at `.venv` (`/opt/homebrew/bin/python3.14`); the system `python3` is 3.9 and too old. Ask before installing new packages.
 - Protocol method names in the Phase 1-4 text (`tasks/send`, `tasks/sendSubscribe`) may be the old A2A names. Treat the installed `a2a-sdk` as the source of truth and inspect its imports before coding. Do not hardcode method names the SDK does not use.
 - Boomi Agentstudio ("Agent Garden") facts, from the `boomi-agentstudio` skill:
   - The Execute API invokes by **`deployment_id`**, not `agent_id`. Only `PRODUCTION` deployments are reachable.
@@ -154,5 +154,12 @@ Agent A (Agentstudio) -> OpenAPI tool -> `POST /agents/B/invoke` -> proxy A2A cl
 - Types are protobuf: `a2a.types.a2a_pb2` (`AgentCard`, `Message`, `Part`, `TaskState.TASK_STATE_*`). The card uses `supported_interfaces[]` (`AgentInterface(url, protocol_binding, protocol_version)`), not a single `url`.
 - JSON-RPC methods are `SendMessage`, `SendStreamingMessage`, `GetTask`, etc., not `tasks/send`. Mount with `a2a.server.routes.create_jsonrpc_routes(request_handler, rpc_url)` and `create_agent_card_routes(card)`. Handler: `DefaultRequestHandler(agent_executor, task_store, agent_card)`. Stores: `InMemoryTaskStore`, `DatabaseTaskStore(engine)`.
 - Executors subclass `a2a.server.agent_execution.AgentExecutor` (`execute`, `cancel`) and publish via `TaskUpdater`. Enqueue a `Task` first when `current_task` is None. Incoming HTTP headers are at `context.call_context.state["headers"]`.
-- Implemented so far (27 tests green): `config.py`, `core/card_builder.py`, `adapters/base.py` (`BaseAdapter.execute` plus streaming `stream`), `core/executor.py` (`BridgeExecutor`).
+- Everything in this file's phase list is implemented (see Current state below). The a2a-sdk facts above are verified against 1.3.0.
 - **Public exposure (ngrok for initial tests):** set `server.public_base_url` so cards advertise the tunnel URL. Inbound auth in `security.py` is mandatory and on by default before any tunnel is started. Never start a tunnel without the user's go-ahead.
+
+
+## Current state (authoritative; supersedes the status lines above)
+- **Built:** config (`config.py`), cards, executor, adapters `http_sync` / `http_async` / `agentstudio`, hardened auth (`security.py`: scoped hashed client keys, OAuth/OIDC JWTs, rate limit, size cap, audit log, per-caller task and session isolation), REST facade and outbound A2A client (`core/facade.py`, `client.py`), `tool-spec` and `keygen` CLIs, Postgres support, read-only control plane (`admin/`), production Dockerfile, `deploy/aws` Terraform, CI and release workflows. About 245 tests; run `.venv/bin/python -m pytest`. Postgres tests run when `A2A_TEST_POSTGRES_URL` is set (CI does).
+- **Pitfalls found the hard way (keep these tests):** a lone agent is also mounted at `/`, and a root `Mount` swallows later routes, so register anything else first. In Terraform, `list == [literal]` is never true (compare as sets). protobuf Values turn ints into floats (`core/values.py` restores them). Validation errors must never echo input (`describe_errors`).
+- **Security rules:** no secrets in config, Terraform state or logs; the control plane stays read-only and shows host names only; never start tunnels, push, or apply AWS without the user's go-ahead.
+- **Open:** the generated field guide (`a2a-bridge guide`), file attachments for Agentstudio, MCP bridge adapter, optional Agent Control Tower registration, tagging a new release to publish the image.

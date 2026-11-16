@@ -2,7 +2,7 @@
 
 A declarative **Universal Agent-to-Agent (A2A) proxy**. Describe an agent in YAML and expose a REST API, a webhook or a Boomi process as a compliant A2A 1.0 agent, with no custom glue code.
 
-> **Status: early development.** Config loading, agent cards, the HTTP sync adapter, the Boomi Agentstudio adapter, inbound auth and per-agent mounting work and are tested. The agent-to-agent REST facade and outbound A2A client work and are tested. A web UI is planned. See [CLAUDE.md](CLAUDE.md) for the roadmap.
+> **Status: early development.** Config loading, agent cards, the HTTP sync adapter, the Boomi Agentstudio adapter, inbound auth and per-agent mounting work and are tested. The agent-to-agent REST facade and outbound A2A client work and are tested. A read-only web control plane is included. See [CLAUDE.md](CLAUDE.md) for the roadmap.
 
 ## Quickstart
 
@@ -145,6 +145,37 @@ Also built in:
 - Terminate TLS in front of the proxy (a load balancer, or ngrok for testing). The proxy warns if `public_base_url` is plain `http://` on a non-local host.
 - Rate limits are in memory per process. With several replicas, each enforces its own limit, so enforce a shared one at your gateway too.
 - Set `server.public_base_url` to the tunnel or gateway URL so cards advertise it.
+
+## Control plane (web UI)
+
+A read-only console at `/admin` that shows how the proxy is wired, what is running, who can call what, recent traffic, and lets you check a configuration before deploying it. It is **off by default**.
+
+```yaml
+server:
+  admin: {enabled: true}
+  inbound_auth:
+    clients:
+      - {id: ops, key_sha256: "<a2a-bridge keygen>", scopes: ["admin:*"]}
+```
+
+Open `https://your-host/admin` and sign in with a key (or an OIDC token) that has the `admin:*` scope.
+
+| Page | What it answers |
+|---|---|
+| Flow | Callers, proxy, agents and backends as a map. A wire lights up when a request goes through it. Configuration findings sit below. |
+| Agents | What each agent runs on, its backend host, and its entry points. |
+| Access | Sign-in method, rate limit, and each client's scopes and expiry. |
+| Traffic | Recent requests (kept in memory) with result, caller and timing, plus per-agent counts. |
+| Check a config | Paste a configuration to see every problem, what would change compared with the running proxy, and anything risky. Nothing is applied. |
+
+Built to be safe to leave on:
+- **Explicit permission.** `admin:*` is never implied by agent scopes, and an admin key cannot call agents. The proxy refuses to start with the control plane on if sign-in is `none` or `bearer_passthrough`.
+- **Nothing sensitive is shown:** no tokens, key hashes, header values, or URL paths (which can carry secrets), only host names. A test plants secrets everywhere and asserts none appear in any response.
+- **Strict browser policy:** the page is served with a Content-Security-Policy that allows no inline script, no outside origins and no framing. Server data is only ever written as text, never as markup (tested with hostile strings).
+- **Audited:** admin requests appear in the audit log like any other.
+- **Read only:** it cannot change the running proxy. Apply changes through your normal deploy.
+
+If the proxy is reachable from the internet, restrict `/admin` at your load balancer (an IP allow-list or VPN) as well.
 
 ## Deploying
 

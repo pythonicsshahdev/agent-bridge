@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from starlette.responses import JSONResponse
 from starlette.routing import Mount
 
+from a2a_bridge.admin import EventBuffer, build_admin_routes, validate_admin
 from a2a_bridge.adapters import create_adapter
 from a2a_bridge.adapters.base import BaseAdapter
 from a2a_bridge.adapters.session_store import SessionStore, SqlSessionStore
@@ -42,6 +43,7 @@ def create_app(
     remote_factory: RemoteFactory = RemoteTarget,
 ) -> FastAPI:
     validate_inbound(config.server.inbound_auth)
+    validate_admin(config)
     facade = config.server.facade
     if config.remote_agents and not facade.enabled:
         raise ConfigError("remote_agents need server.facade.enabled: true")
@@ -79,13 +81,20 @@ def create_app(
         remotes.append(remote)
         mounts.append(Mount(f"/agents/{remote_config.slug}", routes=build_facade_routes(remote_config.slug, remote, facade, base_url, inbound)))
 
+    events = EventBuffer(config.server.admin.event_buffer)
+    audit = logging.getLogger("a2a_bridge.audit")
+
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await task_store.initialize()
         await session_store.initialize()
+        if config.server.admin.enabled:
+            audit.setLevel(logging.INFO)  # the Events view reads the audit log even if the root logger is quieter
+            audit.addHandler(events)
         try:
             yield
         finally:
+            audit.removeHandler(events)
             for adapter in adapters:
                 await adapter.aclose()
             for remote in remotes:
@@ -117,6 +126,10 @@ def create_app(
     async def healthz() -> JSONResponse:
         return JSONResponse({"status": "ok", "agents": [a.slug for a in mounted], "remote_agents": [r.slug for r in config.remote_agents]})
 
+    # Admin routes go before the agent mounts: a lone agent is also mounted at the root ("/"), and a root
+    # mount matches every path, so anything registered after it would never be reached.
+    if config.server.admin.enabled:
+        app.router.routes.extend(build_admin_routes(config, {a.slug for a in mounted}, events))
     app.router.routes.extend(mounts)
     return app
 
