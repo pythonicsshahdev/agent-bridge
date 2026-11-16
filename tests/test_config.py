@@ -100,3 +100,10 @@ def test_bad_yaml_and_missing_file(tmp_path):
         parse_config("agents: [", env={})
     with pytest.raises(ConfigError, match="cannot read"):
         load_config(tmp_path / "nope.yaml")
+
+
+def test_agentstudio_example_loads():
+    env = {k: "x" for k in ("AGENTSTUDIO_EXECUTE_URL", "BOOMI_ACCOUNT_ID", "BOOMI_USERNAME", "BOOMI_API_TOKEN", "A2A_BRIDGE_API_KEY")}
+    env["AGENTSTUDIO_EXECUTE_URL"] = "https://c01-usa-east.ai-agent-garden.boomi.com"
+    cfg = load_config(EXAMPLE.parent / "agents.agentstudio.example.yaml", env=env)
+    assert [a.adapter.mode for a in cfg.agents] == ["conversational", "structured"]

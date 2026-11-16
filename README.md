@@ -2,7 +2,7 @@
 
 A declarative **Universal Agent-to-Agent (A2A) proxy**. Describe an agent in YAML and expose a REST API, a webhook or a Boomi process as a compliant A2A 1.0 agent, with no custom glue code.
 
-> **Status: early development.** Config loading, agent cards, the HTTP sync adapter, inbound auth and per-agent mounting work and are tested. Async job polling, Boomi Agentstudio support and the outbound client are planned. See [CLAUDE.md](CLAUDE.md) for the roadmap.
+> **Status: early development.** Config loading, agent cards, the HTTP sync adapter, the Boomi Agentstudio adapter, inbound auth and per-agent mounting work and are tested. Async job polling, the outbound client and a web UI are planned. See [CLAUDE.md](CLAUDE.md) for the roadmap.
 
 ## Quickstart
 
@@ -61,6 +61,19 @@ Put the `https://...ngrok-free.app` URL in `server.public_base_url` and restart,
 | other 4xx / 5xx, timeout, unreachable | `failed`, with a short reason |
 
 A2A carries JSON numbers as doubles, so whole numbers in a **response** can read back as `2.0`. Numbers in **requests** are converted back to integers before they reach your backend.
+
+## Boomi Agentstudio agents
+
+`adapter.type: agentstudio` exposes a deployed Agentstudio agent as an A2A agent. See [`agents.agentstudio.example.yaml`](agents.agentstudio.example.yaml).
+
+- **Conversations continue.** An A2A `contextId` maps to an Agentstudio `session_id` (stored in the database, so it survives restarts). A new `contextId` starts a new session.
+- **Conversational agents** take text and stream progress: a tool call shows up as a `working` update, the reply as the result. **Structured agents** take one JSON object.
+- **Guardrails.** Set `blocked_message` to the agent's guardrail text and a blocked turn becomes an A2A `rejected` task.
+- **Identity.** Every caller acts as the Boomi service account in your config (the Execute API uses HTTP Basic with an API token), so protect the proxy accordingly. The token needs the `AGENT_INTERACT` privilege and must come from `${ENV}`.
+- **Not yet supported:** file attachments.
+- In YAML flow style (`{a: b}`), quote env references: `api_token: "${BOOMI_API_TOKEN}"`.
+
+Try it without a Boomi account against the bundled mock Execute API: `uvicorn --app-dir tests/mocks agentstudio_execute:app --port 9100`.
 
 ## Security
 

@@ -64,7 +64,9 @@ def build_agent_card(
             )
         )
         required.append("apiKey")
-    if agent.adapter.auth.mode == "bearer_passthrough" or (inbound is not None and inbound.mode == "bearer_passthrough"):
+    downstream = getattr(agent.adapter, "auth", None)  # agentstudio adapters authenticate with their own service account
+    passes_bearer = downstream is not None and downstream.mode == "bearer_passthrough"
+    if passes_bearer or (inbound is not None and inbound.mode == "bearer_passthrough"):
         # The caller's bearer token is forwarded downstream, so clients must send one.
         card.security_schemes["bearer"].CopyFrom(
             SecurityScheme(

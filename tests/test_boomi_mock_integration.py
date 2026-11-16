@@ -31,7 +31,7 @@ agents:
 def client(tmp_path):
     cfg = parse_config(CONFIG.format(db=tmp_path / "t.db"), env={"KEY": "k"})
 
-    def factory(agent):
+    def factory(agent, _sessions):
         http = httpx.AsyncClient(transport=httpx.ASGITransport(app=boomi_app))
         return HttpSyncAdapter(agent.adapter, http)
 

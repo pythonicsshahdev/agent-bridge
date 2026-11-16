@@ -114,7 +114,29 @@ class HttpAsyncAdapterConfig(_Model):
         return v
 
 
-AdapterConfig = Annotated[HttpSyncAdapterConfig | HttpAsyncAdapterConfig, Field(discriminator="type")]
+class AgentstudioAdapterConfig(_Model):
+    """Invoke a deployed Boomi Agentstudio (Agent Garden) agent through the Execute API.
+
+    Every A2A caller acts as the Boomi identity below (a service account); per-caller
+    passthrough is not possible because the Execute API uses HTTP Basic with an API token.
+    """
+
+    type: Literal["agentstudio"]
+    deployment_id: str = Field(min_length=1)
+    execute_url: str  # region host, e.g. https://c01-usa-east.ai-agent-garden.boomi.com
+    account_id: str = Field(min_length=1)
+    username: str = Field(min_length=1)
+    api_token: str = Field(min_length=1)  # must reference ${ENV}
+    mode: Literal["conversational", "structured"] = "conversational"
+    timeout_seconds: float = Field(120, gt=0, le=900)
+    blocked_message: str | None = None  # the agent's guardrail message; matching replies become `rejected`
+
+    _url = field_validator("execute_url")(lambda cls, v: _check_http_url(v))
+
+
+AdapterConfig = Annotated[
+    HttpSyncAdapterConfig | HttpAsyncAdapterConfig | AgentstudioAdapterConfig, Field(discriminator="type")
+]
 
 
 class SkillConfig(_Model):
@@ -200,7 +222,11 @@ def _reject_literal_credentials(raw: Any) -> None:
         if isinstance(key, str) and not _ENV_REF.search(key):
             raise ConfigError("server.inbound_auth.api_keys entries must reference an environment variable, e.g. ${A2A_BRIDGE_API_KEY}")
     for agent in raw.get("agents") or []:
-        auth = ((agent or {}).get("adapter") or {}).get("auth") or {}
+        adapter = (agent or {}).get("adapter") or {}
+        token = adapter.get("api_token")
+        if adapter.get("type") == "agentstudio" and isinstance(token, str) and not _ENV_REF.search(token):
+            raise ConfigError(f"agent '{agent.get('slug', '?')}': api_token must reference an environment variable, e.g. ${{BOOMI_API_TOKEN}}")
+        auth = adapter.get("auth") or {}
         value = auth.get("value")
         if auth.get("mode") == "static_header" and isinstance(value, str) and not _ENV_REF.search(value):
             slug = agent.get("slug", "?")

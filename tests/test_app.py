@@ -29,7 +29,7 @@ agents:""" + "".join(one.format(slug=f"a{i}") for i in range(agents))
 def make_client(tmp_path, handler, agents=1):
     cfg = parse_config(yaml_text(tmp_path, agents), env={"KEY": "test-key"})
 
-    def factory(agent):
+    def factory(agent, _sessions):
         http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         return HttpSyncAdapter(agent.adapter, http)
 

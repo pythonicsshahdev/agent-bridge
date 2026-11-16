@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import aclosing
 from typing import Any
 
 from a2a.helpers.proto_helpers import get_data_parts, new_data_part, new_task_from_user_message, new_text_part
@@ -78,9 +79,10 @@ class BridgeExecutor(AgentExecutor):
             update={"task_id": task_id, "context_id": context_id}
         )
         try:
-            async for result in self.adapter.stream(tctx):
-                if await self._publish(updater, result):
-                    return
+            async with aclosing(self.adapter.stream(tctx)) as results:
+                async for result in results:
+                    if await self._publish(updater, result):
+                        return
         except Exception as exc:  # CancelledError is a BaseException and propagates.
             logger.exception("adapter failed for agent %s task %s", self.agent_slug, task_id)
             await updater.failed(updater.new_agent_message([new_text_part(f"Adapter error: {type(exc).__name__}")]))

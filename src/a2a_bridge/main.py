@@ -19,6 +19,7 @@ from starlette.routing import Mount
 
 from a2a_bridge.adapters import create_adapter
 from a2a_bridge.adapters.base import BaseAdapter
+from a2a_bridge.adapters.session_store import SessionStore, SqlSessionStore
 from a2a_bridge.config import AgentConfig, AppConfig, load_config
 from a2a_bridge.core.card_builder import build_agent_card
 from a2a_bridge.core.executor import BridgeExecutor
@@ -26,19 +27,20 @@ from a2a_bridge.security import InboundAuthMiddleware, validate_inbound
 
 logger = logging.getLogger("a2a_bridge")
 
-AdapterFactory = Callable[[AgentConfig], BaseAdapter | None]
+AdapterFactory = Callable[[AgentConfig, SessionStore], BaseAdapter | None]
 
 
 def create_app(config: AppConfig, adapter_factory: AdapterFactory = create_adapter) -> FastAPI:
     validate_inbound(config.server.inbound_auth)
     engine = create_async_engine(config.server.database_url)
     task_store = DatabaseTaskStore(engine)
+    session_store = SqlSessionStore(engine)
     adapters: list[BaseAdapter] = []
     mounts: list[Mount] = []
     mounted: list[AgentConfig] = []
 
     for agent in config.agents:
-        adapter = adapter_factory(agent)
+        adapter = adapter_factory(agent, session_store)
         if adapter is None:
             logger.warning("agent '%s': adapter type '%s' is not implemented yet; skipping", agent.slug, agent.adapter.type)
             continue
@@ -56,6 +58,7 @@ def create_app(config: AppConfig, adapter_factory: AdapterFactory = create_adapt
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await task_store.initialize()
+        await session_store.initialize()
         try:
             yield
         finally:

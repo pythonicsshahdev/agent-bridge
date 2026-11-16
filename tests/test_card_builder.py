@@ -56,3 +56,18 @@ def test_sparse_config_still_yields_spec_compliant_card():
     d = card_to_dict(build_agent_card(cfg.agents[0], "https://t.example"))
     assert d["description"] == "Sparse"
     assert d["skills"][0]["description"] == "Go" and d["skills"][0]["tags"] == ["go"]
+
+
+def test_agentstudio_agent_card_builds_and_has_no_bearer_scheme():
+    cfg = parse_config(
+        """
+agents:
+  - slug: as
+    name: AS
+    adapter: {type: agentstudio, deployment_id: d, execute_url: "https://e.test", account_id: a, username: u, api_token: "${T}"}
+    skills: [{id: g, name: G}]
+""",
+        env={"T": "x"},
+    )
+    d = card_to_dict(build_agent_card(cfg.agents[0], "https://t.example"))
+    assert d["name"] == "AS" and "securitySchemes" not in d
