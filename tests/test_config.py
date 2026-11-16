@@ -115,3 +115,11 @@ def test_mesh_example_loads():
     cfg = load_config(EXAMPLE.parent / "agents.mesh.example.yaml", env=env)
     assert [r.slug for r in cfg.remote_agents] == ["partner-fulfilment", "partner-pricing"]
     assert cfg.remote_agents[0].auth.mode == "oauth_client_credentials"
+
+
+def test_aws_deploy_example_loads_with_instance_provided_env():
+    env = {"DATABASE_URL": "sqlite+aiosqlite:////data/a2a.db", "A2A_PUBLIC_BASE_URL": "https://a2a.example.com"}
+    text = (EXAMPLE.parent / "deploy" / "aws" / "agents.example.yaml").read_text().replace("REPLACE_WITH_OUTPUT_OF_a2a-bridge_keygen", "a" * 64)
+    cfg = parse_config(text, env=env)
+    assert cfg.server.base_url == "https://a2a.example.com" and cfg.server.forwarded_allow_ips == "*"
+    assert cfg.agents[0].adapter.identity == "caller"

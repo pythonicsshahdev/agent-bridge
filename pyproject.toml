@@ -17,6 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+postgres = ["asyncpg"]
 dev = ["pytest", "pytest-asyncio"]
 
 [project.scripts]

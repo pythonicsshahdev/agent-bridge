@@ -1,0 +1,46 @@
+#!/bin/bash
+set -euo pipefail
+exec > >(tee -a /var/log/a2a-bootstrap.log) 2>&1
+
+dnf install -y docker jq xfsprogs
+systemctl enable --now docker
+
+mkdir -p /data
+%{ if !use_rds ~}
+# Encrypted EBS volume for SQLite. NVMe exposes the volume id (without the dash) as the serial.
+DEV=/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${data_volume_serial}
+for i in $(seq 1 60); do [ -e "$DEV" ] && break; sleep 2; done
+[ -e "$DEV" ] || { echo "data volume did not appear" >&2; exit 1; }
+blkid "$DEV" >/dev/null 2>&1 || mkfs.xfs "$DEV"
+echo "UUID=$(blkid -s UUID -o value "$DEV") /data xfs defaults,nofail 0 2" >> /etc/fstab
+mount /data
+%{ endif ~}
+chown 10001:10001 /data
+
+install -d /etc/a2a-bridge
+cat > /etc/a2a-bridge/boot.env <<'BOOTENV'
+REGION=${region}
+LOG_GROUP=${log_group}
+SECRET_ID=${secret_id}
+CONFIG_PARAM=${config_param}
+IMAGE_PARAM=${image_param}
+PUBLIC_URL=${public_url}
+DB_SECRET_ARN=${db_secret_arn}
+DB_HOST=${db_host}
+BOOTENV
+
+cat > /usr/local/bin/a2a-bridge-prestart <<'PRESTART'
+${prestart_script}
+PRESTART
+
+cat > /usr/local/bin/a2a-bridge-run <<'RUNSCRIPT'
+${run_script}
+RUNSCRIPT
+
+cat > /etc/systemd/system/a2a-bridge.service <<'UNIT'
+${unit_file}
+UNIT
+
+chmod 755 /usr/local/bin/a2a-bridge-prestart /usr/local/bin/a2a-bridge-run
+systemctl daemon-reload
+systemctl enable --now a2a-bridge

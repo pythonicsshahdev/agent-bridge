@@ -123,6 +123,9 @@ class ServerConfig(_Model):
     host: str = "0.0.0.0"
     port: int = Field(8000, ge=1, le=65535)
     database_url: str = "sqlite+aiosqlite:///./a2a_bridge.db"
+    # Which peers may set X-Forwarded-For/Proto (comma-separated IPs, or "*"). Behind a load balancer use "*"
+    # only if the security group admits nothing but the load balancer.
+    forwarded_allow_ips: str = "127.0.0.1"
     # Externally reachable base URL advertised in agent cards. Falls back to host:port.
     public_base_url: str | None = None
     inbound_auth: InboundAuthConfig = Field(default_factory=InboundAuthConfig)

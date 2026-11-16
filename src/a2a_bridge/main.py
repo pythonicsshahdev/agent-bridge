@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -14,6 +15,7 @@ from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
 from a2a.server.tasks import DatabaseTaskStore
 from fastapi import FastAPI
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from starlette.responses import JSONResponse
 from starlette.routing import Mount
@@ -100,12 +102,53 @@ def create_app(
     if base.startswith("http://") and not base.startswith(("http://localhost", "http://127.0.0.1")):
         logger.warning("public base URL %s is not HTTPS; credentials would travel in clear text", base)
 
+    @app.get("/readyz")
+    async def readyz() -> JSONResponse:
+        """Ready only if the database answers; the load balancer uses this, `/healthz` is liveness."""
+        try:
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+        except Exception:
+            logger.exception("readiness check failed")
+            return JSONResponse({"status": "database unavailable"}, status_code=503)
+        return JSONResponse({"status": "ready"})
+
     @app.get("/healthz")
     async def healthz() -> JSONResponse:
         return JSONResponse({"status": "ok", "agents": [a.slug for a in mounted], "remote_agents": [r.slug for r in config.remote_agents]})
 
     app.router.routes.extend(mounts)
     return app
+
+
+class JsonFormatter(logging.Formatter):
+    """One JSON object per line for CloudWatch Logs Insights. Audit records are merged in as fields."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        entry: dict = {"ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"), "level": record.levelname, "logger": record.name}
+        message = record.getMessage()
+        if record.name == "a2a_bridge.audit":
+            try:
+                entry.update(json.loads(message))
+            except ValueError:
+                entry["message"] = message
+        else:
+            entry["message"] = message
+            if record.exc_info:
+                entry["exc"] = self.formatException(record.exc_info)
+        return json.dumps(entry)
+
+
+def configure_logging() -> None:
+    """A2A_BRIDGE_LOG_FORMAT=json for structured logs; plain text otherwise."""
+    handler = logging.StreamHandler()
+    if os.environ.get("A2A_BRIDGE_LOG_FORMAT", "text").lower() == "json":
+        handler.setFormatter(JsonFormatter())
+    else:
+        handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+    logging.basicConfig(level=os.environ.get("A2A_BRIDGE_LOG_LEVEL", "INFO"), handlers=[handler], force=True)
+    for noisy in ("uvicorn.access",):
+        logging.getLogger(noisy).setLevel(logging.WARNING)  # the audit log already records every request
 
 
 def keygen() -> None:
@@ -121,9 +164,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run the a2a-bridge proxy (`a2a-bridge keygen` makes a client key)")
     parser.add_argument("--config", default=os.environ.get("A2A_BRIDGE_CONFIG", "agents.yaml"))
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO)
-    config = load_config(args.config)
-    uvicorn.run(create_app(config), host=config.server.host, port=config.server.port)
+    configure_logging()
+    try:
+        config = load_config(args.config)
+        app = create_app(config)
+    except ConfigError as exc:
+        sys.exit(f"a2a-bridge: configuration error: {exc}")
+    uvicorn.run(
+        app,
+        host=config.server.host,
+        port=config.server.port,
+        proxy_headers=True,
+        forwarded_allow_ips=config.server.forwarded_allow_ips,
+        server_header=False,
+        log_config=None,
+    )
 
 
 if __name__ == "__main__":

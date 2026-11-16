@@ -1,0 +1,27 @@
+# Config for the AWS deployment. It is stored in an SSM parameter, so it must hold NO secrets:
+# keys are SHA-256 hashes (a2a-bridge keygen) and everything sensitive is an ${ENV} reference that the
+# instance fills from Secrets Manager at start-up.
+server:
+  database_url: "${DATABASE_URL}"             # set by the instance: SQLite on EBS, or RDS Postgres when use_rds = true
+  public_base_url: "${A2A_PUBLIC_BASE_URL}"   # set by the instance from domain_name
+  forwarded_allow_ips: "*"                    # safe here: the only inbound path is the load balancer
+  inbound_auth:
+    mode: "api_key"                           # or api_key_or_jwt with a jwt: block for your identity provider
+    clients:
+      - id: "crm-agent"
+        key_sha256: ["REPLACE_WITH_OUTPUT_OF_a2a-bridge_keygen"]
+        scopes: ["agents:it-support"]
+    rate_limit: {requests_per_minute: 120, burst: 30}
+
+agents:
+  - slug: "it-support"
+    name: "IT Support Assistant"
+    description: "First-line IT support."
+    adapter:
+      type: "agentstudio"
+      deployment_id: "11111111-1111-1111-1111-111111111111"
+      execute_url: "https://c01-usa-east.ai-agent-garden.boomi.com"
+      account_id: "YOUR_BOOMI_ACCOUNT_ID"
+      # identity: caller (default): each caller sends their own Boomi token in X-Boomi-Authorization.
+    skills:
+      - {id: "triage", name: "Triage an IT issue", description: "Diagnoses a problem and files a ticket."}

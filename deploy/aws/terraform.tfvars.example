@@ -1,0 +1,13 @@
+region          = "us-east-1"
+domain_name     = "a2a.example.com"
+route53_zone_id = "Z0123456789ABCDEFGHIJ"   # or set certificate_arn and manage DNS yourself
+
+# Internet-facing, but only reachable from these networks. Use internal = true for VPC-only access.
+internal      = false
+allowed_cidrs = ["203.0.113.0/24"]
+
+agents_config_path = "./agents.yaml"        # see ../../agents.example.yaml; no secrets in it
+container_image    = "ghcr.io/pythonicsshahdev/agent-bridge:v0.1.0"   # pin a version
+
+# use_rds = true                            # Postgres instead of SQLite on EBS
+# waf_mode = "count"                        # observe first, then "block"

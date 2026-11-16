@@ -128,3 +128,34 @@ def test_v0_3_client_without_version_header_is_served(tmp_path):
         r = c.post("/agents/a0/rpc", json=body, headers={"X-API-Key": "test-key", "Authorization": "Bearer t"})
         assert r.status_code == 200 and "error" not in r.json(), r.text
         assert r.json()["result"]["status"]["state"] == "completed"
+
+
+def test_readyz_checks_the_database_and_is_public(tmp_path):
+    with make_client(tmp_path, lambda r: httpx.Response(200, json={})) as c:
+        r = c.get("/readyz")  # no credentials
+        assert r.status_code == 200 and r.json() == {"status": "ready"}
+
+
+def test_json_log_formatter_merges_audit_fields_and_plain_messages():
+    import json
+    import logging
+
+    from a2a_bridge.main import JsonFormatter
+
+    f = JsonFormatter()
+    audit = logging.LogRecord("a2a_bridge.audit", logging.INFO, "", 0, json.dumps({"principal": "key:crm", "status": 200}), None, None)
+    plain = logging.LogRecord("a2a_bridge", logging.WARNING, "", 0, "hello %s", ("world",), None)
+    a, p = json.loads(f.format(audit)), json.loads(f.format(plain))
+    assert a["principal"] == "key:crm" and a["status"] == 200 and a["logger"] == "a2a_bridge.audit"
+    assert p["message"] == "hello world" and p["level"] == "WARNING"
+
+
+def test_cli_exits_with_a_clean_message_on_bad_config(tmp_path, monkeypatch, capsys):
+    import sys
+
+    from a2a_bridge.main import main
+
+    monkeypatch.setattr(sys, "argv", ["a2a-bridge", "--config", str(tmp_path / "missing.yaml")])
+    with pytest.raises(SystemExit) as exit_info:
+        main()
+    assert "configuration error" in str(exit_info.value) and "missing.yaml" in str(exit_info.value)

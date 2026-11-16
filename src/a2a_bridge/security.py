@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 audit_logger = logging.getLogger("a2a_bridge.audit")
 
 PUBLIC_SUFFIXES = ("/.well-known/agent-card.json", "/openapi.json")  # discovery documents, no secrets
-PUBLIC_PATHS = frozenset({"/healthz"})
+PUBLIC_PATHS = frozenset({"/healthz", "/readyz"})
 SCOPE_PREFIX = "agents:"
 MAX_CREDENTIAL_CHARS = 8192
 
@@ -323,6 +323,7 @@ class InboundAuthMiddleware:
                 {
                     "ts": datetime.now(UTC).isoformat(timespec="seconds"),
                     "request_id": request_id,
+                    "client": scope["client"][0] if scope.get("client") else None,
                     "principal": principal.id if principal else None,
                     "auth": principal.method if principal else None,
                     "agent": slug,

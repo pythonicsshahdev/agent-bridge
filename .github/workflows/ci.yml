@@ -1,0 +1,59 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: a2a
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pip install -r requirements.lock && pip install --no-deps -e . pytest pytest-asyncio
+      - run: python -m pytest -q
+        env:
+          A2A_TEST_POSTGRES_URL: postgresql+asyncpg://postgres:test@localhost:5432/a2a
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --target prod -t a2a-bridge:ci .
+      - name: container starts and reports its config error cleanly
+        run: |
+          out=$(docker run --rm a2a-bridge:ci 2>&1 || true)
+          echo "$out" | grep -q "configuration error"
+
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy/aws
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+      - run: terraform test
+      - name: boot scripts
+        run: |
+          shellcheck files/prestart.sh files/run.sh
+          sh tests/prestart_test.sh

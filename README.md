@@ -125,6 +125,12 @@ Also built in:
 - Rate limits are in memory per process. With several replicas, each enforces its own limit, so enforce a shared one at your gateway too.
 - Set `server.public_base_url` to the tunnel or gateway URL so cards advertise it.
 
+## Deploying
+
+The production image is `docker build --target prod .` (non-root, pinned dependencies, JSON logs). It talks to SQLite or Postgres (`pip install ".[postgres]"` and a `postgresql+asyncpg://` URL), serves `/healthz` (liveness) and `/readyz` (database check), and trusts `X-Forwarded-*` only from the peers in `server.forwarded_allow_ips`.
+
+For AWS (EC2 + ALB + WAF + Secrets Manager + CloudWatch, optional RDS), see [`deploy/aws`](deploy/aws/README.md).
+
 ## Tests
 
 ```bash

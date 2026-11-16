@@ -1,0 +1,16 @@
+[Unit]
+Description=a2a-bridge
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+ExecStartPre=/usr/local/bin/a2a-bridge-prestart
+ExecStartPre=-/usr/bin/docker rm -f a2a-bridge
+ExecStart=/usr/local/bin/a2a-bridge-run
+ExecStop=/usr/bin/docker stop -t 30 a2a-bridge
+
+[Install]
+WantedBy=multi-user.target
