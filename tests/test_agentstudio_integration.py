@@ -23,6 +23,7 @@ agents:
       deployment_id: dep-chat
       execute_url: "https://exec.test"
       account_id: acct-1
+      identity: service_account
       username: mock-user
       api_token: "${{TOK}}"
     skills: [{{id: ask, name: Ask}}]

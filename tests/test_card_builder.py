@@ -64,10 +64,44 @@ def test_agentstudio_agent_card_builds_and_has_no_bearer_scheme():
 agents:
   - slug: as
     name: AS
-    adapter: {type: agentstudio, deployment_id: d, execute_url: "https://e.test", account_id: a, username: u, api_token: "${T}"}
+    adapter: {type: agentstudio, identity: service_account, deployment_id: d, execute_url: "https://e.test", account_id: a, username: u, api_token: "${T}"}
     skills: [{id: g, name: G}]
 """,
         env={"T": "x"},
     )
     d = card_to_dict(build_agent_card(cfg.agents[0], "https://t.example"))
     assert d["name"] == "AS" and "securitySchemes" not in d
+
+
+def _card(yaml_text, env=None):
+    from a2a_bridge.config import parse_config
+
+    cfg = parse_config(yaml_text, env=env or {})
+    return card_to_dict(build_agent_card(cfg.agents[0], "https://t.example", inbound=cfg.server.inbound_auth))
+
+
+AS_CALLER = """
+server: {inbound_auth: {mode: api_key_or_jwt, header_name: X-API-Key,
+  clients: [{id: c, key_sha256: "%s"}],
+  jwt: {issuer: "https://idp.test/", audience: a2a, jwks_url: "https://idp.test/jwks", discovery_url: "https://idp.test/.well-known/openid-configuration"}}}
+agents:
+  - slug: as
+    name: AS
+    adapter: {type: agentstudio, deployment_id: d, execute_url: "https://e.test", account_id: a}
+    skills: [{id: g, name: G}]
+""" % ("a" * 64)
+
+
+def test_card_lists_inbound_alternatives_each_combined_with_boomi_credentials():
+    d = _card(AS_CALLER)
+    assert d["securitySchemes"]["oidc"]["openIdConnectSecurityScheme"]["openIdConnectUrl"].endswith("openid-configuration")
+    assert d["securitySchemes"]["boomiCredentials"]["apiKeySecurityScheme"]["name"] == "X-Boomi-Authorization"
+    reqs = sorted(sorted(r["schemes"]) for r in d["securityRequirements"])
+    assert reqs == [["apiKey", "boomiCredentials"], ["boomiCredentials", "oidc"]]  # either way, plus the caller's Boomi token
+
+
+def test_jwt_inbound_without_discovery_url_advertises_bearer_jwt_and_no_duplicate_bearer():
+    text = AS_CALLER.replace(', discovery_url: "https://idp.test/.well-known/openid-configuration"', "").replace("mode: api_key_or_jwt", "mode: jwt")
+    d = _card(text)
+    assert d["securitySchemes"]["oidc"]["httpAuthSecurityScheme"]["bearerFormat"] == "JWT"
+    assert [sorted(r["schemes"]) for r in d["securityRequirements"]] == [["boomiCredentials", "oidc"]]

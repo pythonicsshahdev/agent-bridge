@@ -25,9 +25,11 @@ class TaskContext(BaseModel):
     agent_slug: str
     task_id: str
     context_id: str
+    principal: str = ""  # authenticated caller id; conversations are keyed by it
     text: str = ""
     data: list[Any] = Field(default_factory=list)
-    headers: dict[str, str] = Field(default_factory=dict)  # incoming HTTP headers, lower-cased
+    # Incoming HTTP headers, lower-cased. May hold credentials, so it is kept out of repr/logs.
+    headers: dict[str, str] = Field(default_factory=dict, repr=False)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

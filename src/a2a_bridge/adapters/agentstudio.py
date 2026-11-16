@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -41,7 +43,11 @@ class AgentstudioAdapter(BaseAdapter):
         self.config = config
         self._sessions = session_store or InMemorySessionStore()
         self._client = client or httpx.AsyncClient()
-        self._auth = httpx.BasicAuth(f"BOOMI_TOKEN.{config.username}", config.api_token)
+        self._service_auth = (
+            httpx.BasicAuth(f"BOOMI_TOKEN.{config.username}", config.api_token)
+            if config.username and config.api_token
+            else None
+        )
         self._url = f"{config.execute_url.rstrip('/')}/execute/api/v1/{config.account_id}/session"
 
     async def execute(self, context: TaskContext) -> AdapterResult:
@@ -55,8 +61,13 @@ class AgentstudioAdapter(BaseAdapter):
         if isinstance(message, AdapterResult):
             yield message
             return
+        credentials = self._credentials(context)
+        if isinstance(credentials, AdapterResult):
+            yield credentials
+            return
+        auth, caller_headers, as_caller = credentials
         body: dict[str, Any] = {"deployment_id": self.config.deployment_id, "message": message}
-        session_id = await self._sessions.get(context.agent_slug, context.context_id)
+        session_id = await self._sessions.get(context.agent_slug, context.principal, context.context_id)
         if session_id:
             body["session_id"] = session_id
         try:
@@ -65,12 +76,12 @@ class AgentstudioAdapter(BaseAdapter):
                     "POST",
                     self._url,
                     json=body,
-                    auth=self._auth,
-                    headers={"Accept": "text/event-stream, application/json"},
+                    auth=auth,
+                    headers={"Accept": "text/event-stream, application/json", **caller_headers},
                 ) as response:
                     if not response.is_success:
                         await response.aread()
-                        yield self._http_error(response)
+                        yield self._http_error(response, as_caller)
                     elif "text/event-stream" in response.headers.get("content-type", ""):
                         async for result in self._consume_sse(response, context):
                             yield result
@@ -82,6 +93,38 @@ class AgentstudioAdapter(BaseAdapter):
         except httpx.HTTPError as exc:
             logger.warning("agentstudio call failed: %s", type(exc).__name__)
             yield _failed("Agentstudio unreachable")
+
+    def _credentials(self, context: TaskContext) -> tuple[httpx.Auth | None, dict[str, str], bool] | AdapterResult:
+        """(auth, extra headers, acting_as_caller). Callers bring their own Boomi token unless configured otherwise."""
+        cfg = self.config
+        if cfg.identity == "service_account":
+            return self._service_auth, {}, False
+        header = context.headers.get(cfg.caller_credentials_header.lower(), "")
+        if not header:
+            if cfg.allow_service_account_fallback:
+                return self._service_auth, {}, False
+            return AdapterResult(
+                state=AdapterState.AUTH_REQUIRED,
+                error=f"Send your Boomi credentials in the {cfg.caller_credentials_header} header "
+                "as 'Basic base64(BOOMI_TOKEN.<user>:<api token>)'",
+            )
+        if not self._valid_boomi_basic(header):
+            return AdapterResult(
+                state=AdapterState.AUTH_REQUIRED,
+                error=f"{cfg.caller_credentials_header} must be 'Basic base64(BOOMI_TOKEN.<user>:<api token>)'",
+            )
+        return None, {"Authorization": header}, True
+
+    @staticmethod
+    def _valid_boomi_basic(header: str) -> bool:
+        scheme, _, encoded = header.partition(" ")
+        if scheme.lower() != "basic" or len(header) > 1024:
+            return False
+        try:
+            user, sep, token = base64.b64decode(encoded, validate=True).decode().partition(":")
+        except (binascii.Error, UnicodeDecodeError):
+            return False
+        return bool(sep and token and user.startswith("BOOMI_TOKEN.") and len(user) > len("BOOMI_TOKEN."))
 
     def _message(self, context: TaskContext) -> str | dict[str, Any] | AdapterResult:
         """Conversational agents take text; structured agents take one JSON object."""
@@ -98,9 +141,14 @@ class AgentstudioAdapter(BaseAdapter):
             return parsed
         return _failed("Structured agent needs exactly one JSON object (a data part, or text containing JSON)")
 
-    def _http_error(self, response: httpx.Response) -> AdapterResult:
+    def _http_error(self, response: httpx.Response, as_caller: bool) -> AdapterResult:
         status = response.status_code
         detail = response.text[:MAX_ERROR_CHARS].strip()
+        if status in (401, 403) and as_caller:
+            return AdapterResult(
+                state=AdapterState.AUTH_REQUIRED,
+                error=f"Agentstudio rejected your Boomi credentials (HTTP {status}); the token needs the AGENT_INTERACT privilege",
+            )
         if status in (401, 403):
             # The proxy's own Boomi credentials were refused; that is not the caller's problem to fix.
             return _failed(f"Agentstudio rejected the proxy's credentials (HTTP {status}); check account and token privileges")
@@ -110,7 +158,7 @@ class AgentstudioAdapter(BaseAdapter):
 
     async def _remember(self, context: TaskContext, session_id: Any) -> None:
         if isinstance(session_id, str) and session_id:
-            await self._sessions.set(context.agent_slug, context.context_id, session_id)
+            await self._sessions.set(context.agent_slug, context.principal, context.context_id, session_id)
 
     async def _consume_sse(self, response: httpx.Response, context: TaskContext) -> AsyncIterator[AdapterResult]:
         replies: list[str] = []

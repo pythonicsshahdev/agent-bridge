@@ -43,6 +43,7 @@ def build_task_context(agent_slug: str, context: RequestContext) -> TaskContext:
         agent_slug=agent_slug,
         task_id=context.task_id or "",
         context_id=context.context_id or "",
+        principal=context.call_context.user.user_name if context.call_context else "",
         text=context.get_user_input(),
         data=_restore_ints(get_data_parts(message.parts)) if message else [],
         headers={k.lower(): v for k, v in headers.items()},

@@ -14,6 +14,7 @@ BASE = {
     "type": "agentstudio",
     "execute_url": "https://exec.test",
     "account_id": "acct-1",
+    "identity": "service_account",
     "username": "mock-user",
     "api_token": "mock-token",
 }
@@ -160,10 +161,99 @@ def test_literal_api_token_in_yaml_is_rejected():
 agents:
   - slug: s
     name: S
-    adapter: {type: agentstudio, deployment_id: d, execute_url: "https://e.test", account_id: a, username: u, api_token: hunter2}
+    adapter: {type: agentstudio, identity: service_account, deployment_id: d, execute_url: "https://e.test", account_id: a, username: u, api_token: hunter2}
     skills: [{id: g, name: G}]
 """
     with pytest.raises(ConfigError, match="api_token"):
         parse_config(text, env={})
     ok = text.replace("hunter2", "\"${TOK}\"")
     assert parse_config(ok, env={"TOK": "x"}).agents[0].adapter.api_token == "x"
+
+
+# ---------------------------------------------------------------- identity: caller vs service account
+
+
+def basic(user="mock-user", token="mock-token", prefix="BOOMI_TOKEN."):
+    import base64
+
+    return "Basic " + base64.b64encode(f"{prefix}{user}:{token}".encode()).decode()
+
+
+def caller_adapter(store=None, **overrides):
+    base = {k: v for k, v in BASE.items() if k not in ("identity", "username", "api_token")}
+    cfg = AgentstudioAdapterConfig(**{**base, "deployment_id": "dep-chat", **overrides})
+    client = httpx.AsyncClient(transport=httpx.ASGITransport(app=execute_app))
+    return AgentstudioAdapter(cfg, store or InMemorySessionStore(), client)
+
+
+def caller_ctx(text="hi", header=None, principal="key:alice", context_id="ctx-1"):
+    headers = {"x-boomi-authorization": header} if header else {}
+    return TaskContext(agent_slug="a", task_id="t", context_id=context_id, principal=principal, text=text, headers=headers)
+
+
+async def test_caller_identity_uses_the_callers_own_boomi_credentials():
+    result = (await collect(caller_adapter(), caller_ctx(header=basic())))[-1]
+    assert result.state == AdapterState.COMPLETED
+
+
+async def test_caller_identity_without_credentials_needs_auth_and_never_calls_out():
+    class Boom:
+        async def handle_async_request(self, request):
+            raise AssertionError("must not call Agentstudio without caller credentials")
+
+    cfg = AgentstudioAdapterConfig(**{k: v for k, v in BASE.items() if k not in ("identity", "username", "api_token")}, deployment_id="d")
+    adapter = AgentstudioAdapter(cfg, client=httpx.AsyncClient(transport=Boom()))
+    result = (await collect(adapter, caller_ctx()))[-1]
+    assert result.state == AdapterState.AUTH_REQUIRED and "X-Boomi-Authorization" in result.error
+
+
+@pytest.mark.parametrize(
+    "header",
+    ["Bearer abc", "Basic !!!not-base64!!!", basic(prefix="evil:"), basic(token=""), "Basic " + "A" * 2000],
+)
+async def test_malformed_or_non_boomi_credentials_are_refused_before_any_call(header):
+    result = (await collect(caller_adapter(), caller_ctx(header=header)))[-1]
+    assert result.state == AdapterState.AUTH_REQUIRED
+
+
+async def test_callers_rejected_boomi_token_is_auth_required_not_a_server_failure():
+    result = (await collect(caller_adapter(), caller_ctx(header=basic(token="wrong"))))[-1]
+    assert result.state == AdapterState.AUTH_REQUIRED and "your Boomi credentials" in result.error
+    assert "wrong" not in result.error
+
+
+async def test_service_account_fallback_only_when_enabled():
+    with_fallback = caller_adapter(allow_service_account_fallback=True, username="mock-user", api_token="mock-token")
+    assert (await collect(with_fallback, caller_ctx()))[-1].state == AdapterState.COMPLETED
+    assert (await collect(caller_adapter(), caller_ctx()))[-1].state == AdapterState.AUTH_REQUIRED
+
+
+async def test_callers_header_wins_over_the_fallback_account():
+    adapter = caller_adapter(allow_service_account_fallback=True, username="mock-user", api_token="mock-token")
+    result = (await collect(adapter, caller_ctx(header=basic(token="wrong"))))[-1]
+    assert result.state == AdapterState.AUTH_REQUIRED  # used the caller's (bad) token, did not silently fall back
+
+
+async def test_two_callers_cannot_share_a_conversation_by_guessing_the_context_id():
+    store = InMemorySessionStore()
+    a = caller_adapter(store)
+    alice_1 = (await collect(a, caller_ctx("one", basic(), principal="key:alice")))[-1]
+    mallory = (await collect(a, caller_ctx("steal", basic(), principal="key:mallory")))[-1]  # same context_id
+    alice_2 = (await collect(a, caller_ctx("two", basic(), principal="key:alice")))[-1]
+    assert alice_1.text == "Turn 1: you said one"
+    assert mallory.text == "Turn 1: you said steal"  # fresh session, not alice's
+    assert alice_2.text == "Turn 2: you said two"
+
+
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        ({"identity": "service_account"}, "required for a service account"),
+        ({"allow_service_account_fallback": True}, "required for a service account"),
+        ({"username": "u", "api_token": "t"}, "set but unused"),
+    ],
+)
+def test_identity_config_validation(kwargs, match):
+    base = {k: v for k, v in BASE.items() if k not in ("identity", "username", "api_token")}
+    with pytest.raises(Exception, match=match):
+        AgentstudioAdapterConfig(**base, deployment_id="d", **kwargs)

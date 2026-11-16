@@ -46,7 +46,7 @@ def request(text="hi", current_task=None, headers=None):
         task_id="t1",
         context_id="c1",
         current_task=current_task,
-        call_context=SimpleNamespace(state={"headers": headers or {}}),
+        call_context=SimpleNamespace(state={"headers": headers or {}}, user=SimpleNamespace(user_name="key:crm")),
         metadata={},
         get_user_input=lambda: text,
     )
@@ -66,6 +66,8 @@ async def test_completed_publishes_artifact_then_complete():
     assert len(art.artifact.parts) == 2
     assert a.seen.headers == {"authorization": "Bearer abc"}
     assert a.seen.text == "hi" and a.seen.data == [{"qty": 2.0}]
+    assert a.seen.principal == "key:crm"
+    assert "abc" not in repr(a.seen)  # credentials in headers must not leak through repr/logging
 
 
 async def test_working_updates_before_terminal():

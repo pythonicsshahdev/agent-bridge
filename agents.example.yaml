@@ -5,9 +5,23 @@ server:
   # public_base_url: "https://abc123.ngrok-free.app"   # advertised in agent cards; set to your tunnel URL
   # Who may call this proxy. Required unless you explicitly set mode: none.
   inbound_auth:
-    mode: "api_key"                       # api_key | bearer_passthrough | none
+    mode: "api_key"                       # api_key | jwt | api_key_or_jwt | bearer_passthrough | none
     header_name: "X-API-Key"
-    api_keys: ["${A2A_BRIDGE_API_KEY}"]   # keys must come from the environment
+    api_keys: ["${A2A_BRIDGE_API_KEY}"]   # quick start: one key, full access, taken from the environment
+    # Production: per-client keys. Only the SHA-256 goes in config (run `a2a-bridge keygen`).
+    # clients:
+    #   - id: "crm-agent"
+    #     key_sha256: ["<new hash>", "<old hash, remove after rotation>"]
+    #     scopes: ["agents:boomi-order-sync"]       # or "agents:*"
+    #     expires_at: "2027-06-30T00:00:00Z"
+    # OAuth 2.0 / OIDC access tokens (mode: jwt or api_key_or_jwt). Scopes are agents:<slug> in the token.
+    # jwt:
+    #   issuer: "https://idp.example.com/"
+    #   audience: "a2a-bridge"
+    #   jwks_url: "https://idp.example.com/.well-known/jwks.json"
+    #   discovery_url: "https://idp.example.com/.well-known/openid-configuration"   # advertised in cards
+    rate_limit: {requests_per_minute: 120, burst: 30}   # per caller
+    max_request_bytes: 1048576
 
 agents:
   # Synchronous REST/Boomi web-services listener. Forwards the caller's Authorization header.

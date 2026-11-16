@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import sys
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
@@ -23,7 +24,7 @@ from a2a_bridge.adapters.session_store import SessionStore, SqlSessionStore
 from a2a_bridge.config import AgentConfig, AppConfig, load_config
 from a2a_bridge.core.card_builder import build_agent_card
 from a2a_bridge.core.executor import BridgeExecutor
-from a2a_bridge.security import InboundAuthMiddleware, validate_inbound
+from a2a_bridge.security import InboundAuthMiddleware, generate_key, validate_inbound
 
 logger = logging.getLogger("a2a_bridge")
 
@@ -67,7 +68,14 @@ def create_app(config: AppConfig, adapter_factory: AdapterFactory = create_adapt
             await engine.dispose()
 
     app = FastAPI(title="a2a-bridge", lifespan=lifespan)
-    app.add_middleware(InboundAuthMiddleware, auth=config.server.inbound_auth)
+    app.add_middleware(
+        InboundAuthMiddleware,
+        auth=config.server.inbound_auth,
+        root_slug=config.root_agent.slug if config.root_agent else None,
+    )
+    base = config.server.base_url
+    if base.startswith("http://") and not base.startswith(("http://localhost", "http://127.0.0.1")):
+        logger.warning("public base URL %s is not HTTPS; credentials would travel in clear text", base)
 
     @app.get("/healthz")
     async def healthz() -> JSONResponse:
@@ -77,8 +85,17 @@ def create_app(config: AppConfig, adapter_factory: AdapterFactory = create_adapt
     return app
 
 
+def keygen() -> None:
+    key, digest = generate_key()
+    print(f"key (give to the client, shown once): {key}")
+    print(f"key_sha256 (put in the config):       {digest}")
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the a2a-bridge proxy")
+    if sys.argv[1:2] == ["keygen"]:
+        keygen()
+        return
+    parser = argparse.ArgumentParser(description="Run the a2a-bridge proxy (`a2a-bridge keygen` makes a client key)")
     parser.add_argument("--config", default=os.environ.get("A2A_BRIDGE_CONFIG", "agents.yaml"))
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)

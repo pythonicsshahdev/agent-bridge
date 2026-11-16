@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Mapping
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -29,12 +30,84 @@ def _check_http_url(value: str) -> str:
     return value
 
 
+_SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
+_SLUG_OR_STAR = re.compile(r"^(\*|[a-z0-9][a-z0-9-]*)$")
+
+
+class ClientConfig(_Model):
+    """A machine client of the proxy. Only the SHA-256 of its key is configured, never the key.
+
+    List several hashes to rotate: add the new one, move clients over, then remove the old one.
+    Generate a key and hash with `a2a-bridge keygen`.
+    """
+
+    id: str = Field(pattern=r"^[A-Za-z0-9._-]{1,64}$")
+    key_sha256: list[str] = Field(min_length=1)
+    scopes: list[str] = Field(default_factory=lambda: ["agents:*"])  # agents:<slug> or agents:*
+    expires_at: datetime | None = None
+
+    @field_validator("key_sha256", mode="before")
+    @classmethod
+    def _one_or_many(cls, v: Any) -> Any:
+        return [v] if isinstance(v, str) else v
+
+    @field_validator("key_sha256")
+    @classmethod
+    def _hex_digests(cls, v: list[str]) -> list[str]:
+        v = [h.strip().lower() for h in v]
+        if any(not _SHA256_HEX.match(h) for h in v):
+            raise ValueError("key_sha256 entries must be 64-character hex SHA-256 digests (see `a2a-bridge keygen`)")
+        return v
+
+    @field_validator("scopes")
+    @classmethod
+    def _scopes(cls, v: list[str]) -> list[str]:
+        for scope in v:
+            if not scope.startswith("agents:") or not _SLUG_OR_STAR.match(scope.removeprefix("agents:")):
+                raise ValueError(f"scope '{scope}' must be 'agents:<slug>' or 'agents:*'")
+        return v
+
+
+class JwtConfig(_Model):
+    """Validate OAuth 2.0 / OIDC access tokens (JWTs) from your identity provider."""
+
+    issuer: str = Field(min_length=1)
+    audience: str | list[str]
+    jwks_url: str
+    discovery_url: str | None = None  # OIDC discovery document, advertised in agent cards
+    algorithms: list[Literal["RS256", "RS384", "RS512", "ES256", "ES384", "PS256", "PS384", "PS512"]] = Field(
+        default_factory=lambda: ["RS256"], min_length=1
+    )  # asymmetric only: HS* and `none` are never accepted
+    leeway_seconds: int = Field(30, ge=0, le=300)
+    scope_claim: str = "scope"  # space-delimited string, or a list (also reads `scp`)
+    jwks_cache_seconds: int = Field(3600, ge=60)
+
+    _urls = field_validator("jwks_url", "discovery_url")(lambda cls, v: v if v is None else _check_http_url(v))
+
+
+class RateLimitConfig(_Model):
+    requests_per_minute: int = Field(120, ge=1)
+    burst: int = Field(30, ge=1)
+
+
 class InboundAuthConfig(_Model):
     """Who may call this proxy. Defaults to API keys; `none` must be chosen explicitly."""
 
-    mode: Literal["api_key", "bearer_passthrough", "none"] = "api_key"
+    mode: Literal["api_key", "jwt", "api_key_or_jwt", "bearer_passthrough", "none"] = "api_key"
     header_name: str = "X-API-Key"
-    api_keys: list[str] = Field(default_factory=list)  # each must reference ${ENV}
+    clients: list[ClientConfig] = Field(default_factory=list)
+    api_keys: list[str] = Field(default_factory=list)  # simple form: each must reference ${ENV}; full access
+    jwt: JwtConfig | None = None
+    rate_limit: RateLimitConfig | None = Field(default_factory=RateLimitConfig)
+    max_request_bytes: int = Field(1_048_576, ge=1024)
+
+    @model_validator(mode="after")
+    def _clients_unique(self) -> InboundAuthConfig:
+        ids = [c.id for c in self.clients]
+        dupes = sorted({i for i in ids if ids.count(i) > 1})
+        if dupes:
+            raise ValueError(f"duplicate client ids: {dupes}")
+        return self
 
 
 class ServerConfig(_Model):
@@ -117,21 +190,37 @@ class HttpAsyncAdapterConfig(_Model):
 class AgentstudioAdapterConfig(_Model):
     """Invoke a deployed Boomi Agentstudio (Agent Garden) agent through the Execute API.
 
-    Every A2A caller acts as the Boomi identity below (a service account); per-caller
-    passthrough is not possible because the Execute API uses HTTP Basic with an API token.
+    The Execute API uses HTTP Basic with a Boomi API token. By default each caller supplies their own
+    (`identity: caller`), so Boomi RBAC and audit apply per person. A shared service account is optional.
     """
 
     type: Literal["agentstudio"]
     deployment_id: str = Field(min_length=1)
     execute_url: str  # region host, e.g. https://c01-usa-east.ai-agent-garden.boomi.com
     account_id: str = Field(min_length=1)
-    username: str = Field(min_length=1)
-    api_token: str = Field(min_length=1)  # must reference ${ENV}
+    identity: Literal["caller", "service_account"] = "caller"
+    # Caller identity: the caller sends `Basic base64(BOOMI_TOKEN.<user>:<token>)` in this header.
+    caller_credentials_header: str = "X-Boomi-Authorization"
+    allow_service_account_fallback: bool = False  # identity=caller: use the service account when no header is sent
+    username: str | None = None  # service account (identity=service_account or fallback)
+    api_token: str | None = None  # service account token; must reference ${ENV}
     mode: Literal["conversational", "structured"] = "conversational"
     timeout_seconds: float = Field(120, gt=0, le=900)
     blocked_message: str | None = None  # the agent's guardrail message; matching replies become `rejected`
 
     _url = field_validator("execute_url")(lambda cls, v: _check_http_url(v))
+
+    @model_validator(mode="after")
+    def _identity_credentials(self) -> AgentstudioAdapterConfig:
+        needs_service = self.identity == "service_account" or self.allow_service_account_fallback
+        has_service = bool(self.username and self.api_token)
+        if needs_service and not has_service:
+            raise ValueError("username and api_token are required for a service account")
+        if not needs_service and (self.username or self.api_token):
+            raise ValueError(
+                "username/api_token are set but unused: identity is 'caller' with no service-account fallback"
+            )
+        return self
 
 
 AdapterConfig = Annotated[

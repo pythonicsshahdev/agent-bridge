@@ -2,7 +2,7 @@
 # Needs a PRODUCTION deployment and a token with the AGENT_INTERACT privilege.
 # Set in your environment (never in this file):
 #   AGENTSTUDIO_EXECUTE_URL  region host, e.g. https://c01-usa-east.ai-agent-garden.boomi.com
-#   BOOMI_ACCOUNT_ID  BOOMI_USERNAME  BOOMI_API_TOKEN  A2A_BRIDGE_API_KEY
+#   BOOMI_ACCOUNT_ID  BOOMI_USERNAME  BOOMI_API_TOKEN (service account only)  A2A_BRIDGE_API_KEY
 server:
   inbound_auth:
     api_keys: ["${A2A_BRIDGE_API_KEY}"]
@@ -17,8 +17,10 @@ agents:
       deployment_id: "11111111-1111-1111-1111-111111111111"
       execute_url: "${AGENTSTUDIO_EXECUTE_URL}"
       account_id: "${BOOMI_ACCOUNT_ID}"
-      username: "${BOOMI_USERNAME}"
-      api_token: "${BOOMI_API_TOKEN}"
+      # identity: caller (default) - each caller sends their own Boomi credentials in X-Boomi-Authorization,
+      # so Boomi RBAC and audit apply per person. For a shared service account instead, set
+      #   identity: "service_account"   (or allow_service_account_fallback: true)
+      # plus username: "${BOOMI_USERNAME}" and api_token: "${BOOMI_API_TOKEN}".
       mode: "conversational"
       timeout_seconds: 120
       blocked_message: "I can't help with that request."   # the agent's guardrail message -> A2A `rejected`
@@ -36,6 +38,7 @@ agents:
       deployment_id: "22222222-2222-2222-2222-222222222222"
       execute_url: "${AGENTSTUDIO_EXECUTE_URL}"
       account_id: "${BOOMI_ACCOUNT_ID}"
+      identity: "service_account"      # trusted internal use: one least-privilege Boomi token held by the proxy
       username: "${BOOMI_USERNAME}"
       api_token: "${BOOMI_API_TOKEN}"
       mode: "structured"

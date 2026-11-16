@@ -11,7 +11,7 @@ Requires Python 3.11+.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install "a2a-sdk[fastapi,sql]" fastapi uvicorn pydantic pyyaml httpx aiosqlite pytest pytest-asyncio
-cp agents.example.yaml agents.yaml          # edit the downstream URL
+cp agents.example.yaml agents.yaml          # edit the downstream URL (production auth: see Security)
 export A2A_BRIDGE_API_KEY="$(openssl rand -hex 24)"
 PYTHONPATH=src .venv/bin/python -m a2a_bridge.main --config agents.yaml
 ```
@@ -77,10 +77,30 @@ Try it without a Boomi account against the bundled mock Execute API: `uvicorn --
 
 ## Security
 
-- Inbound auth is on by default. The proxy will not start without `inbound_auth.api_keys`, and keys and downstream credentials must come from `${ENV_VAR}`. Literal secrets in the YAML are rejected.
-- The agent card and `/healthz` are public. Everything else needs the key.
-- `bearer_passthrough` forwards the caller's `Authorization` header to the backend, so the backend enforces its own RBAC.
-- If you expose the proxy through a tunnel such as ngrok, set `server.public_base_url` to the tunnel URL so cards advertise it.
+**Who can call the proxy** (`server.inbound_auth`). The proxy refuses to start without a way to authenticate callers. The agent card and `/healthz` are public so clients can discover agents; everything else needs credentials.
+
+| Method | Use it for |
+|---|---|
+| **Per-client API keys** (`clients:`) | Machine clients. Only the SHA-256 is configured (`a2a-bridge keygen` prints a key and its hash). Each client has `scopes` (`agents:<slug>` or `agents:*`) and an optional `expires_at`. List two hashes to rotate with no downtime. |
+| **OAuth 2.0 / OIDC JWTs** (`jwt:`) | People and services behind your identity provider. Checks signature (JWKS), issuer, audience, expiry and not-before. Asymmetric algorithms only: `HS*` and `none` are never accepted. Scopes come from the token (`scope`, `scp`, or your own claim). Cards advertise the OIDC discovery URL. |
+| `api_key_or_jwt` | Both, so machines and people can use the same proxy. |
+| `api_keys:` | Quick-start single key with full access. Prefer `clients:` for anything shared. |
+
+Also built in:
+- **Per-agent authorization.** A caller without the scope for an agent gets 403, whether or not that agent exists.
+- **Task isolation.** Each caller's tasks are private to them. Another caller who learns a task id still cannot read it.
+- **Rate limiting** per caller (429 with `Retry-After`), a **request size cap** (413), and an **audit log** (`a2a_bridge.audit`, one JSON line per request with caller, agent, status and latency, and never credentials).
+- **No secrets in config.** Keys are stored as hashes, and downstream credentials must come from `${ENV_VAR}`. Literal secrets are rejected.
+- An identity provider outage returns 503 with `Retry-After`, not a silent denial.
+
+**Who the backend sees.**
+- `bearer_passthrough` forwards the caller's `Authorization` header, so the backend enforces its own RBAC.
+- **Agentstudio** defaults to `identity: caller`: each caller sends their own Boomi credentials in `X-Boomi-Authorization` (`Basic base64(BOOMI_TOKEN.<user>:<api token>)`), so Boomi RBAC and audit apply per person. Conversations are keyed by caller, so nobody can reach another caller's session by guessing a `contextId`. For trusted internal use you can instead set `identity: service_account` (one least-privilege token held by the proxy) or `allow_service_account_fallback: true`.
+
+**Deploying safely**
+- Terminate TLS in front of the proxy (a load balancer, or ngrok for testing). The proxy warns if `public_base_url` is plain `http://` on a non-local host.
+- Rate limits are in memory per process. With several replicas, each enforces its own limit, so enforce a shared one at your gateway too.
+- Set `server.public_base_url` to the tunnel or gateway URL so cards advertise it.
 
 ## Tests
 

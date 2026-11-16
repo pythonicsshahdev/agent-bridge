@@ -13,6 +13,7 @@ sessions_table = Table(
     "a2a_bridge_sessions",
     metadata,
     Column("agent_slug", String(128), primary_key=True),
+    Column("owner", String(256), primary_key=True),
     Column("context_id", String(128), primary_key=True),
     Column("session_id", String(128), nullable=False),
     Column("updated_at", DateTime(timezone=True), server_default=func.now(), onupdate=func.now()),
@@ -20,20 +21,20 @@ sessions_table = Table(
 
 
 class SessionStore(Protocol):
-    async def get(self, agent_slug: str, context_id: str) -> str | None: ...
+    async def get(self, agent_slug: str, owner: str, context_id: str) -> str | None: ...
 
-    async def set(self, agent_slug: str, context_id: str, session_id: str) -> None: ...
+    async def set(self, agent_slug: str, owner: str, context_id: str, session_id: str) -> None: ...
 
 
 class InMemorySessionStore:
     def __init__(self) -> None:
-        self._data: dict[tuple[str, str], str] = {}
+        self._data: dict[tuple[str, str, str], str] = {}
 
-    async def get(self, agent_slug: str, context_id: str) -> str | None:
-        return self._data.get((agent_slug, context_id))
+    async def get(self, agent_slug: str, owner: str, context_id: str) -> str | None:
+        return self._data.get((agent_slug, owner, context_id))
 
-    async def set(self, agent_slug: str, context_id: str, session_id: str) -> None:
-        self._data[(agent_slug, context_id)] = session_id
+    async def set(self, agent_slug: str, owner: str, context_id: str, session_id: str) -> None:
+        self._data[(agent_slug, owner, context_id)] = session_id
 
 
 class SqlSessionStore:
@@ -46,22 +47,30 @@ class SqlSessionStore:
         async with self._engine.begin() as conn:
             await conn.run_sync(metadata.create_all)
 
-    async def get(self, agent_slug: str, context_id: str) -> str | None:
+    async def get(self, agent_slug: str, owner: str, context_id: str) -> str | None:
         stmt = select(sessions_table.c.session_id).where(
-            sessions_table.c.agent_slug == agent_slug, sessions_table.c.context_id == context_id
+            sessions_table.c.agent_slug == agent_slug,
+            sessions_table.c.owner == owner,
+            sessions_table.c.context_id == context_id,
         )
         async with self._engine.connect() as conn:
             return (await conn.execute(stmt)).scalar_one_or_none()
 
-    async def set(self, agent_slug: str, context_id: str, session_id: str) -> None:
-        key = (sessions_table.c.agent_slug == agent_slug) & (sessions_table.c.context_id == context_id)
+    async def set(self, agent_slug: str, owner: str, context_id: str, session_id: str) -> None:
+        key = (
+            (sessions_table.c.agent_slug == agent_slug)
+            & (sessions_table.c.owner == owner)
+            & (sessions_table.c.context_id == context_id)
+        )
         async with self._engine.begin() as conn:
             result = await conn.execute(update(sessions_table).where(key).values(session_id=session_id))
             if result.rowcount:
                 return
             try:
                 await conn.execute(
-                    insert(sessions_table).values(agent_slug=agent_slug, context_id=context_id, session_id=session_id)
+                    insert(sessions_table).values(
+                        agent_slug=agent_slug, owner=owner, context_id=context_id, session_id=session_id
+                    )
                 )
             except IntegrityError:  # lost a race with a concurrent first turn
                 await conn.execute(update(sessions_table).where(key).values(session_id=session_id))
