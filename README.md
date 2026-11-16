@@ -2,7 +2,7 @@
 
 A declarative **Universal Agent-to-Agent (A2A) proxy**. Describe an agent in YAML and expose a REST API, a webhook or a Boomi process as a compliant A2A 1.0 agent, with no custom glue code.
 
-> **Status: early development.** Config loading, agent cards, the HTTP sync adapter, the Boomi Agentstudio adapter, inbound auth and per-agent mounting work and are tested. The agent-to-agent REST facade and outbound A2A client work and are tested. Async job polling and a web UI are planned. See [CLAUDE.md](CLAUDE.md) for the roadmap.
+> **Status: early development.** Config loading, agent cards, the HTTP sync adapter, the Boomi Agentstudio adapter, inbound auth and per-agent mounting work and are tested. The agent-to-agent REST facade and outbound A2A client work and are tested. A web UI is planned. See [CLAUDE.md](CLAUDE.md) for the roadmap.
 
 ## Quickstart
 
@@ -61,6 +61,16 @@ Put the `https://...ngrok-free.app` URL in `server.public_base_url` and restart,
 | other 4xx / 5xx, timeout, unreachable | `failed`, with a short reason |
 
 A2A carries JSON numbers as doubles, so whole numbers in a **response** can read back as `2.0`. Numbers in **requests** are converted back to integers before they reach your backend.
+
+## Long-running jobs (`http_async`)
+
+For backends that start a job and return an id (a Boomi process behind a 202, an export, a batch), `adapter.type: http_async` starts the job, polls a status endpoint, and reports progress as A2A `working` updates. See the second agent in [`agents.example.yaml`](agents.example.yaml).
+
+- **Mapping:** `job_id_path` finds the id in the start response, `status_path` the status in each poll, and `completed_values` / `failed_values` decide the outcome (case-insensitive). `result_path` picks what to return and `error_path` the failure reason. Dotted paths work through lists (`items.0.id`).
+- **Progress** is reported when the status changes, not on every poll.
+- **Robust polling:** transient errors are tolerated (`max_poll_errors`), a 404 or 401/403 ends the task, and `max_poll_seconds` bounds the job. On timeout or cancel, `cancel_url` (if set) is called so the downstream job stops too, with the same caller credentials.
+- **Safe:** the job id is URL-encoded into the status path, so a hostile backend cannot redirect the poll.
+- The caller's bearer token (with `bearer_passthrough`) is used for the start, every poll and the cancel, and is never stored beyond the life of the job.
 
 ## Boomi Agentstudio agents
 

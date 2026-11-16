@@ -185,18 +185,22 @@ class HttpAsyncAdapterConfig(_Model):
     status_method: Literal["GET", "POST"] = "GET"
     status_path: str = "status"  # dotted path into the status response body
     result_path: str | None = None  # dotted path to the result; whole body if unset
+    error_path: str | None = None  # dotted path to a failure reason in the status body
+    cancel_url: str | None = None  # must contain {job_id}; called when the A2A task is canceled or times out
+    cancel_method: Literal["POST", "DELETE"] = "DELETE"
+    max_poll_errors: int = Field(3, ge=1, le=20)  # consecutive failed polls tolerated before giving up
     completed_values: list[str] = Field(default_factory=lambda: ["completed", "success", "done"])
     failed_values: list[str] = Field(default_factory=lambda: ["failed", "error"])
     poll_interval_seconds: float = Field(2.0, gt=0)
     max_poll_seconds: float = Field(300.0, gt=0)
 
-    _url = field_validator("url", "status_url")(lambda cls, v: _check_http_url(v))
+    _url = field_validator("url", "status_url", "cancel_url")(lambda cls, v: v if v is None else _check_http_url(v))
 
-    @field_validator("status_url")
+    @field_validator("status_url", "cancel_url")
     @classmethod
-    def _has_job_id(cls, v: str) -> str:
-        if "{job_id}" not in v:
-            raise ValueError("status_url must contain the {job_id} placeholder")
+    def _has_job_id(cls, v: str | None) -> str | None:
+        if v is not None and "{job_id}" not in v:
+            raise ValueError("status_url and cancel_url must contain the {job_id} placeholder")
         return v
 
 

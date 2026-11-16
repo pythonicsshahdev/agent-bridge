@@ -17,11 +17,17 @@ _order_ids = itertools.count(_FIRST_ORDER_ID)
 _orders: dict[str, dict] = {}
 
 
+_job_ids = itertools.count(1)
+_jobs: dict[str, dict] = {}
+
+
 def reset_state() -> None:
-    """Forget all orders and restart ids; used between tests."""
-    global _order_ids
+    """Forget all orders and jobs and restart ids; used between tests."""
+    global _order_ids, _job_ids
     _order_ids = itertools.count(_FIRST_ORDER_ID)
+    _job_ids = itertools.count(1)
     _orders.clear()
+    _jobs.clear()
 
 
 def _require_bearer(authorization: str | None) -> None:
@@ -54,3 +60,50 @@ async def get_order(order_id: str, authorization: str | None = Header(None)) -> 
 @app.post("/ws/simple/alwaysFails")
 async def always_fails() -> None:
     raise HTTPException(status_code=500, detail="simulated Boomi process error")
+
+
+# ---- async jobs: trigger returns 202 + an execution id, then poll the status endpoint -------------------------
+# Start body (all optional): {"polls": 2, "fail": false, "flaky": false}. The job reports RUNNING for `polls`
+# status calls, then COMPLETE (with a result) or ERROR. `flaky` makes the second status call return a 503 once.
+# Canceling reports ABORTED afterwards.
+
+
+@app.post("/ws/simple/startExport", status_code=202)
+async def start_export(request: Request, authorization: str | None = Header(None)) -> dict:
+    _require_bearer(authorization)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    job_id = f"EXE-{next(_job_ids)}"
+    _jobs[job_id] = {"polls": int(body.get("polls", 2)), "fail": bool(body.get("fail")), "flaky": bool(body.get("flaky")), "calls": 0, "cancels": 0, "flaked": False, "auth": authorization}
+    return {"executionId": job_id, "status": "SUBMITTED"}
+
+
+@app.get("/ws/simple/exportStatus/{job_id}")
+async def export_status(job_id: str, authorization: str | None = Header(None)) -> dict:
+    _require_bearer(authorization)
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"no job {job_id}")
+    job["calls"] += 1
+    if job["flaky"] and job["calls"] == 2 and not job["flaked"]:
+        job["flaked"] = True
+        raise HTTPException(status_code=503, detail="try again")
+    if job["cancels"]:
+        return {"status": "ABORTED"}
+    if job["calls"] <= job["polls"]:
+        return {"status": "RUNNING", "percent": min(99, job["calls"] * 100 // (job["polls"] + 1))}
+    if job["fail"]:
+        return {"status": "ERROR", "message": "export failed: disk full"}
+    return {"status": "COMPLETE", "result": {"rows": 42, "file": "export.csv"}}
+
+
+@app.delete("/ws/simple/exportCancel/{job_id}")
+async def export_cancel(job_id: str, authorization: str | None = Header(None)) -> dict:
+    _require_bearer(authorization)
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"no job {job_id}")
+    job["cancels"] += 1
+    return {"status": "CANCELING"}

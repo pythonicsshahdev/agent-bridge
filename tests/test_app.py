@@ -102,17 +102,21 @@ def test_single_agent_is_also_served_at_root(tmp_path):
         assert r.json()["result"]["task"]["status"]["state"] == "TASK_STATE_COMPLETED"
 
 
-def test_unimplemented_adapter_is_skipped(tmp_path):
+def test_agent_whose_adapter_the_factory_declines_is_skipped(tmp_path):
     text = yaml_text(tmp_path) + """
   - slug: later
     name: Later
-    adapter: {type: http_async, url: "https://x.test/s", status_url: "https://x.test/s/{job_id}"}
+    adapter: {type: http_sync, url: "https://x.test/s"}
     skills: [{id: g, name: G}]
 """
-    from a2a_bridge.adapters import create_adapter
-
     cfg = parse_config(text, env={"KEY": "test-key"})
-    with TestClient(create_app(cfg, create_adapter)) as c:
+
+    def factory(agent, _sessions):
+        if agent.slug == "later":
+            return None  # an adapter type this build does not provide
+        return HttpSyncAdapter(agent.adapter, httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={}))))
+
+    with TestClient(create_app(cfg, factory)) as c:
         assert c.get("/healthz").json()["agents"] == ["a0"]
         assert c.get("/agents/later/.well-known/agent-card.json").status_code == 404
 
