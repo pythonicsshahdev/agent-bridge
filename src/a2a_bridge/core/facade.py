@@ -11,10 +11,12 @@ This is protocol translation only: the same executors, task store, owner scoping
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+from urllib.parse import parse_qsl
 
 from a2a.helpers.proto_helpers import get_data_parts, get_text_parts, new_data_part, new_text_part
 from a2a.types.a2a_pb2 import (
@@ -187,7 +189,7 @@ def build_facade_routes(
     @_guard
     async def invoke(request: Request) -> JSONResponse:
         try:
-            body = InvokeRequest.model_validate(await request.json())
+            body = InvokeRequest.model_validate(await read_invoke_input(request))
         except (ValidationError, ValueError) as exc:
             return _error(422, _validation_summary(exc))
         parts = ([new_text_part(body.message)] if body.message.strip() else []) + (
@@ -234,10 +236,49 @@ def build_facade_routes(
     ]
 
 
+_INVOKE_FIELDS = ("message", "data", "context_id", "task_id", "wait_seconds")
+
+
+def _coerce_invoke(raw: dict[str, Any]) -> dict[str, Any]:
+    """Tool platforms fill every placeholder, so an unused one arrives as "". Treat empty strings as absent,
+    and accept `data` as a JSON string and `wait_seconds` as text (form and query inputs are all strings)."""
+    out = {k: v for k, v in raw.items() if v != ""}
+    if isinstance(out.get("data"), str):
+        try:
+            out["data"] = json.loads(out["data"])
+        except ValueError as exc:
+            raise ValueError("data must be a JSON object") from exc
+    if isinstance(out.get("wait_seconds"), str):
+        try:
+            out["wait_seconds"] = float(out["wait_seconds"])
+        except ValueError as exc:
+            raise ValueError("wait_seconds must be a number") from exc
+    return out
+
+
+async def read_invoke_input(request: Request) -> dict[str, Any]:
+    """JSON body, form-encoded body, or query parameters (body fields win). Lets tools that cannot
+    build a JSON body safely, or that bind structured parameters, call the same endpoint."""
+    raw: dict[str, Any] = {k: v for k, v in request.query_params.items() if k in _INVOKE_FIELDS}
+    body = await request.body()
+    if body.strip():
+        content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+        if content_type == "application/x-www-form-urlencoded":
+            raw.update({k: v for k, v in parse_qsl(body.decode("utf-8", "replace"), keep_blank_values=True)})
+        else:
+            parsed = json.loads(body)
+            if not isinstance(parsed, dict):
+                raise ValueError("request body must be a JSON object")
+            raw.update(parsed)
+    return _coerce_invoke(raw)
+
+
 def _validation_summary(exc: Exception) -> str:
     if isinstance(exc, ValidationError):
         return "; ".join(f"{'.'.join(map(str, e['loc'])) or 'body'}: {e['msg']}" for e in exc.errors())
-    return "request body must be valid JSON"
+    if isinstance(exc, json.JSONDecodeError):
+        return "request body must be valid JSON"
+    return str(exc)
 
 
 def openapi_document(slug: str, info: TargetInfo, base_url: str, inbound: InboundAuthConfig | None) -> dict[str, Any]:

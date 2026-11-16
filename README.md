@@ -96,7 +96,18 @@ The reply is a small summary: `state` (`completed`, `working`, `failed`, `reject
 - **Local and remote agents** share one endpoint. Register external A2A agents under `remote_agents:` (see [`agents.mesh.example.yaml`](agents.mesh.example.yaml)). Their card is fetched lazily and refreshed on a TTL, and an unreachable remote is a 502, not a startup failure.
 - **Outbound auth to a remote agent:** `none`, `bearer_passthrough` (forward the caller's token), `static_header`, or `oauth_client_credentials` (token cached until shortly before it expires). Secrets must come from `${ENV}`, and remote URLs must be `https://`.
 - **Error mapping:** 401/403 from the proxy's own auth, 404 unknown or foreign task, 422 bad request, 502 remote unreachable or rejected our credentials, 504 remote timed out.
+- The endpoint accepts a JSON body, a form-encoded body, or query parameters (body fields win), so tools that cannot build a JSON body safely can still call it.
 - Set `server.facade.enabled: false` to turn the facade off.
+
+### Register an agent as an Agentstudio tool
+
+```bash
+a2a-bridge tool-spec --config agents.yaml --base-url https://a2a.example.com --out tools/
+# writes tools/<slug>-ask.tool.json and tools/<slug>-check-task.tool.json
+agentstudio-tool.sh create --type OpenAPI --body tools/it-support-ask.tool.json   # then: install --type OpenAPI <id>
+```
+
+The generated files contain **no credentials**. Set authentication in the Boomi console: a `token_auth` header with this proxy's API key. If the target agent uses `identity: caller`, the tool also needs a Boomi credentials header, which in practice identifies the tool's identity, so use a dedicated least-privilege Boomi token (or set the target to `identity: service_account`). `--style query` binds parameters instead of templating a JSON body, in case your Agentstudio does not escape quotes in `{{placeholders}}`. The tool definitions satisfy the documented OpenAPI tool rules (checked in tests) but have not been run against a live Agentstudio tenant.
 
 ## Security
 

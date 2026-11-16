@@ -157,9 +157,51 @@ def keygen() -> None:
     print(f"key_sha256 (put in the config):       {digest}")
 
 
+def tool_spec(argv: list[str]) -> None:
+    from pathlib import Path
+
+    from a2a_bridge.toolspec import STYLES, write_tools
+
+    parser = argparse.ArgumentParser(
+        prog="a2a-bridge tool-spec",
+        description="Write Boomi Agentstudio OpenAPI tool definitions for agents in a config. No credentials are written.",
+    )
+    parser.add_argument("--config", default=os.environ.get("A2A_BRIDGE_CONFIG", "agents.yaml"))
+    parser.add_argument("--agent", action="append", help="slug to generate (repeatable); default: all local agents")
+    parser.add_argument("--base-url", help="where the proxy is reachable; default: server.public_base_url")
+    parser.add_argument("--style", choices=STYLES, default="json", help="json body, or query parameters (no JSON escaping concerns)")
+    parser.add_argument("--out", default="tools", help="output directory")
+    parser.add_argument("--no-task-tool", action="store_true", help="skip the check-task tool")
+    args = parser.parse_args(argv)
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        sys.exit(f"a2a-bridge: configuration error: {exc}")
+    agents = [a for a in config.agents if not args.agent or a.slug in args.agent]
+    unknown = set(args.agent or []) - {a.slug for a in config.agents}
+    if unknown or not agents:
+        sys.exit(f"a2a-bridge: no such local agent: {', '.join(sorted(unknown)) or '(none selected)'}")
+    base_url = args.base_url or config.server.base_url
+    if base_url.startswith("http://localhost") or base_url.startswith("http://127."):
+        print(f"warning: {base_url} is not reachable from Boomi; pass --base-url with your public address", file=sys.stderr)
+    for path in write_tools(agents, base_url, Path(args.out), args.style, not args.no_task_tool):
+        print(path)
+    print(
+        "\nNext, for each file (no secrets are in them):\n"
+        "  agentstudio-tool.sh create --type OpenAPI --body <file>   then   install --type OpenAPI <id>\n"
+        "Then set authentication in the Boomi console: a token_auth header with this proxy's key "
+        f"(header {config.server.inbound_auth.header_name}). If the target agent uses identity: caller, also add its "
+        "Boomi credentials header there; use a dedicated least-privilege Boomi token for that.",
+        file=sys.stderr,
+    )
+
+
 def main() -> None:
     if sys.argv[1:2] == ["keygen"]:
         keygen()
+        return
+    if sys.argv[1:2] == ["tool-spec"]:
+        tool_spec(sys.argv[2:])
         return
     parser = argparse.ArgumentParser(description="Run the a2a-bridge proxy (`a2a-bridge keygen` makes a client key)")
     parser.add_argument("--config", default=os.environ.get("A2A_BRIDGE_CONFIG", "agents.yaml"))
