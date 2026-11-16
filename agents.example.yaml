@@ -1,0 +1,54 @@
+server:
+  host: "0.0.0.0"
+  port: 8000
+  database_url: "sqlite+aiosqlite:///./a2a_bridge.db"
+  # public_base_url: "https://abc123.ngrok-free.app"   # advertised in agent cards; set to your tunnel URL
+  # Who may call this proxy. Required unless you explicitly set mode: none.
+  inbound_auth:
+    mode: "api_key"                       # api_key | bearer_passthrough | none
+    header_name: "X-API-Key"
+    api_keys: ["${A2A_BRIDGE_API_KEY}"]   # keys must come from the environment
+
+agents:
+  # Synchronous REST/Boomi web-services listener. Forwards the caller's Authorization header.
+  - slug: "boomi-order-sync"
+    name: "Boomi Order Fulfillment Agent"
+    description: "Submits and tracks ERP orders through Boomi Web Services."
+    version: "1.0.0"
+    adapter:
+      type: "http_sync"
+      url: "https://boomi.com"   # placeholder: your Boomi listener URL
+      method: "POST"
+      timeout_seconds: 30
+      auth:
+        mode: "bearer_passthrough" # Options: none, bearer_passthrough, static_header
+        header_name: "Authorization"
+    skills:
+      - id: "create_order"
+        name: "Create ERP Order"
+        description: "Creates a new order payload in the downstream ERP."
+        tags: ["erp", "boomi", "orders"]
+
+  # Trigger + poll: a 202 with a job id, then a status endpoint. Static key comes from the environment.
+  - slug: "boomi-batch-export"
+    name: "Boomi Batch Export Agent"
+    description: "Starts a long-running Boomi export and reports progress."
+    adapter:
+      type: "http_async"
+      url: "https://boomi.example.com/ws/rest/export/start"
+      status_url: "https://boomi.example.com/ws/rest/export/status/{job_id}"
+      job_id_path: "executionId"
+      status_path: "status"
+      completed_values: ["COMPLETE"]
+      failed_values: ["ERROR", "ABORTED"]
+      poll_interval_seconds: 2
+      max_poll_seconds: 300
+      auth:
+        mode: "static_header"
+        header_name: "X-API-Key"
+        value: "${BOOMI_EXPORT_API_KEY}"
+    skills:
+      - id: "run_export"
+        name: "Run Export"
+        description: "Runs the batch export and returns its result."
+        tags: ["boomi", "export"]
