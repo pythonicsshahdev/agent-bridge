@@ -16,7 +16,7 @@ agents:
 
 
 def test_example_loads():
-    cfg = load_config(EXAMPLE, env={"BOOMI_EXPORT_API_KEY": "k"})
+    cfg = load_config(EXAMPLE, env={"BOOMI_EXPORT_API_KEY": "k", "A2A_BRIDGE_API_KEY": "bridge-key"})
     assert [a.slug for a in cfg.agents] == ["boomi-order-sync", "boomi-batch-export"]
     first = cfg.agents[0]
     assert first.adapter.type == "http_sync"

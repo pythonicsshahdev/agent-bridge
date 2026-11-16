@@ -1,0 +1,24 @@
+# Demo config for docker-compose: the proxy in front of the bundled mock Boomi listener.
+server:
+  host: "0.0.0.0"
+  port: 8000
+  database_url: "sqlite+aiosqlite:////data/a2a_bridge.db"
+  # public_base_url: "https://abc123.ngrok-free.app"   # set when exposing via a tunnel
+  inbound_auth:
+    mode: "api_key"
+    api_keys: ["${A2A_BRIDGE_API_KEY}"]
+
+agents:
+  - slug: "boomi-order-sync"
+    name: "Boomi Order Fulfillment Agent"
+    description: "Creates orders through a (mock) Boomi web-services listener."
+    adapter:
+      type: "http_sync"
+      url: "http://mock-boomi:9000/ws/simple/createOrder"
+      auth:
+        mode: "bearer_passthrough"
+    skills:
+      - id: "create_order"
+        name: "Create ERP Order"
+        description: "Creates an order. Send a data part such as {\"sku\": \"A1\", \"qty\": 2}."
+        tags: ["erp", "orders"]

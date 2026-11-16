@@ -1,0 +1,19 @@
+# Proxy + mock Boomi listener. Try it:
+#   export A2A_BRIDGE_API_KEY=$(openssl rand -hex 24)
+#   docker compose up --build
+services:
+  mock-boomi:
+    build: .
+    command: ["uvicorn", "--app-dir", "/app/mocks", "boomi_listener:app", "--host", "0.0.0.0", "--port", "9000"]
+    expose: ["9000"]
+
+  bridge:
+    build: .
+    depends_on: [mock-boomi]
+    ports: ["8000:8000"]
+    environment:
+      A2A_BRIDGE_API_KEY: ${A2A_BRIDGE_API_KEY:?set A2A_BRIDGE_API_KEY, e.g. export A2A_BRIDGE_API_KEY=$(openssl rand -hex 24)}
+    volumes: ["bridge-data:/data"]
+
+volumes:
+  bridge-data:

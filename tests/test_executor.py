@@ -104,3 +104,14 @@ async def test_cancel_calls_adapter_and_publishes_canceled():
     await BridgeExecutor(a, "svc").cancel(request(), q)
     assert a.cancelled == ["t1"]
     assert q.states() == [TaskState.TASK_STATE_CANCELED]
+
+
+async def test_whole_numbers_in_data_parts_are_restored_to_ints():
+    a = Adapter([AdapterResult(state=AdapterState.COMPLETED)])
+    q = Queue()
+    req = request()
+    req.message.parts.append(new_data_part({"qty": 3, "price": 2.5, "ids": [1, 2], "nested": {"n": 7}}))
+    await BridgeExecutor(a, "svc").execute(req, q)
+    got = a.seen.data[1]
+    assert got == {"qty": 3, "price": 2.5, "ids": [1, 2], "nested": {"n": 7}}
+    assert type(got["qty"]) is int and type(got["ids"][0]) is int and type(got["price"]) is float
