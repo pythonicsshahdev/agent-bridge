@@ -31,6 +31,34 @@ jobs:
         env:
           A2A_TEST_POSTGRES_URL: postgresql+asyncpg://postgres:test@localhost:5432/a2a
 
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: pip install -r requirements.lock
+      - name: start the demo
+        run: |
+          nohup demo/run.sh > demo.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:8013/readyz >/dev/null 2>&1 && break; sleep 1; done
+          sleep 12   # let it seed its traffic
+          curl -sf http://127.0.0.1:8013/admin >/dev/null
+      - name: browser tests
+        working-directory: tests/browser
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+        run: |
+          npm ci
+          npm test
+      - name: demo log on failure
+        if: failure()
+        run: tail -50 demo.log demo/proxy.log || true
+
   image:
     runs-on: ubuntu-latest
     steps:

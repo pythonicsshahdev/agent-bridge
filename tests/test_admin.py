@@ -282,3 +282,106 @@ def test_admin_works_when_a_single_agent_is_also_mounted_at_the_root(tmp_path):
 def test_the_flow_map_does_not_draw_admin_only_clients_as_callers(client):
     nodes = {n["id"] for n in client.get("/admin/api/diagram", headers=ADMIN).json()["nodes"]}
     assert "caller:crm" in nodes and "caller:ops" not in nodes
+
+
+# ---------------------------------------------------------------- register an agent: preview
+
+
+def preview(client, agent, headers=ADMIN):
+    return client.post("/admin/api/agent/preview", json={"agent": agent}, headers=headers)
+
+
+REST_AGENT = {
+    "slug": "invoices",
+    "name": "Invoices",
+    "description": "Looks up invoices",
+    "adapter": {"type": "http_sync", "url": "https://erp.example.com/invoices", "method": "POST", "auth": {"mode": "bearer_passthrough"}},
+    "skills": [{"id": "lookup", "name": "Look up an invoice"}],
+}
+ASYNC_AGENT = {
+    "slug": "report",
+    "name": "Report",
+    "adapter": {
+        "type": "http_async", "url": "https://x.example.com/start", "status_url": "https://x.example.com/s/{job_id}",
+        "cancel_url": "https://x.example.com/c/{job_id}", "job_id_path": "executionId", "completed_values": ["COMPLETE"],
+        "failed_values": ["ERROR"], "auth": {"mode": "static_header", "header_name": "X-Key", "value": "${REPORT_KEY}"},
+    },
+    "skills": [{"id": "run", "name": "Run"}],
+}
+STUDIO_AGENT = {
+    "slug": "helpdesk",
+    "name": "Help desk",
+    "adapter": {"type": "agentstudio", "deployment_id": "d-1", "execute_url": "https://c01-usa-east.ai-agent-garden.boomi.com", "account_id": "acct", "mode": "conversational"},
+    "skills": [{"id": "ask", "name": "Ask"}],
+}
+
+
+@pytest.mark.parametrize("agent", [REST_AGENT, ASYNC_AGENT, STUDIO_AGENT])
+def test_preview_accepts_each_adapter_type_and_renders_yaml_that_loads_back(client, agent):
+    r = preview(client, agent).json()
+    assert r["ok"] is True and r["slug"] == agent["slug"] and r["slug_taken"] is False
+    reloaded = parse_config("agents:\n" + "".join("  " + line + "\n" for line in r["yaml"].splitlines()), env={"REPORT_KEY": "x"})
+    assert reloaded.agents[0].slug == agent["slug"] and reloaded.agents[0].adapter.type == agent["adapter"]["type"]
+
+
+def test_preview_keeps_env_references_intact_and_reports_whether_they_are_set(client, monkeypatch):
+    monkeypatch.setenv("REPORT_KEY", "SENTINEL-VALUE-123")
+    r = preview(client, ASYNC_AGENT).json()
+    assert "${REPORT_KEY}" in r["yaml"] and r["env"] == [{"name": "REPORT_KEY", "set": True}]
+    assert "SENTINEL-VALUE-123" not in json.dumps(r), "the value of an environment variable must never be returned"
+    monkeypatch.delenv("REPORT_KEY")
+    unset = preview(client, ASYNC_AGENT).json()
+    assert unset["ok"] is True, "an unset variable here must not fail the check: the agent may run elsewhere"
+    assert unset["env"] == [{"name": "REPORT_KEY", "set": False}]
+
+
+def test_preview_flags_a_slug_that_is_already_in_use(client):
+    assert preview(client, {**REST_AGENT, "slug": "orders"}).json()["slug_taken"] is True
+    assert preview(client, {**REST_AGENT, "slug": "partner"}).json()["slug_taken"] is True  # a remote agent's slug counts too
+
+
+@pytest.mark.parametrize(
+    "mutate, expected",
+    [
+        (lambda a: a.update(slug="Bad Slug"), "slug"),
+        (lambda a: a["adapter"].update(url="ftp://x"), "http"),
+        (lambda a: a.update(skills=[]), "skills"),
+        (lambda a: a.update(bogus=1), "bogus"),
+        (lambda a: a["adapter"].update(type="telepathy"), "adapter"),
+    ],
+)
+def test_preview_reports_problems_by_field_without_the_agents_0_prefix(client, mutate, expected):
+    agent = json.loads(json.dumps(REST_AGENT))
+    mutate(agent)
+    r = preview(client, agent).json()
+    assert r["ok"] is False and any(expected in e for e in r["errors"]) and not any(e.startswith("agents.0.") for e in r["errors"])
+    assert "yaml" not in r
+
+
+def test_preview_refuses_literal_secrets_and_does_not_echo_them(client):
+    leaky = json.loads(json.dumps(ASYNC_AGENT))
+    leaky["adapter"]["auth"]["value"] = "hunter2hunter2"
+    r = preview(client, leaky).json()
+    assert r["ok"] is False and "hunter2" not in json.dumps(r) and "environment variable" in " ".join(r["errors"])
+    studio = json.loads(json.dumps(STUDIO_AGENT))
+    studio["adapter"].update(identity="service_account", username="u", api_token="sup3r-secret-token")
+    r = preview(client, studio).json()
+    assert r["ok"] is False and "sup3r-secret-token" not in json.dumps(r)
+
+
+def test_preview_gives_findings_for_this_agent_only(client):
+    plain = json.loads(json.dumps(REST_AGENT))
+    plain["adapter"]["url"] = "http://erp.example.com/x"
+    findings = preview(client, plain).json()["findings"]
+    assert any("plain HTTP" in f["message"] for f in findings)
+    assert not any("Client" in f["message"] or "Rate limiting" in f["message"] for f in findings), "server-wide findings do not belong here"
+
+
+def test_preview_is_admin_only_and_validates_its_input(client):
+    assert client.post("/admin/api/agent/preview", json={"agent": REST_AGENT}).status_code == 401
+    assert preview(client, REST_AGENT, AGENT).status_code == 403
+    assert client.post("/admin/api/agent/preview", json={"nope": 1}, headers=ADMIN).status_code == 422
+    assert client.post("/admin/api/agent/preview", content=b"not json", headers=ADMIN).status_code == 422
+    assert client.post("/admin/api/agent/preview", json={"agent": "text"}, headers=ADMIN).json()["ok"] is False
+    big = {"agent": {**REST_AGENT, "description": "x" * 70_000}}
+    assert client.post("/admin/api/agent/preview", json=big, headers=ADMIN).status_code == 413

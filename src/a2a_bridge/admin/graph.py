@@ -74,6 +74,26 @@ def agent_callers(config: AppConfig) -> list[Any]:
     return [c for c in config.server.inbound_auth.clients if any(sc.startswith("agents:") for sc in c.scopes)]
 
 
+def lint_agent(agent: AgentConfig) -> list[dict[str, str]]:
+    """Findings about one agent on its own (no server-wide settings)."""
+    found: list[dict[str, str]] = []
+
+    def add(level: str, message: str) -> None:
+        found.append({"level": level, "message": message})
+
+    a = agent.adapter
+    if a.type == "agentstudio" and a.identity == "service_account":
+        add("info", f"Agent '{agent.slug}' runs as one shared Boomi service account; Boomi audit shows a single identity.")
+    if a.type == "agentstudio" and a.identity == "caller" and a.allow_service_account_fallback:
+        add("info", f"Agent '{agent.slug}' falls back to a shared service account when a caller sends no Boomi credentials.")
+    url = a.execute_url if a.type == "agentstudio" else a.url
+    if url.startswith("http://"):
+        add("warn", f"Agent '{agent.slug}' calls its backend over plain HTTP.")
+    if a.type in ("http_sync", "http_async") and a.auth.mode == "none":
+        add("info", f"Agent '{agent.slug}' sends no credentials to its backend.")
+    return found
+
+
 def lint(config: AppConfig) -> list[dict[str, str]]:
     """Findings an operator should see. `warn` is worth fixing before production; `info` is context."""
     found: list[dict[str, str]] = []
@@ -105,16 +125,7 @@ def lint(config: AppConfig) -> list[dict[str, str]]:
     if server.admin.enabled:
         add("info", "The admin control plane is enabled; keep admin:* keys to a small set of people.")
     for agent in config.agents:
-        a = agent.adapter
-        if a.type == "agentstudio" and a.identity == "service_account":
-            add("info", f"Agent '{agent.slug}' runs as one shared Boomi service account; Boomi audit shows a single identity.")
-        if a.type == "agentstudio" and a.identity == "caller" and a.allow_service_account_fallback:
-            add("info", f"Agent '{agent.slug}' falls back to a shared service account when a caller sends no Boomi credentials.")
-        url = a.execute_url if a.type == "agentstudio" else a.url
-        if url.startswith("http://"):
-            add("warn", f"Agent '{agent.slug}' calls its backend over plain HTTP.")
-        if a.type in ("http_sync", "http_async") and a.auth.mode == "none":
-            add("info", f"Agent '{agent.slug}' sends no credentials to its backend.")
+        found.extend(lint_agent(agent))
     return found
 
 

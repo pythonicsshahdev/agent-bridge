@@ -38,13 +38,19 @@ function el(tag, props = {}, ...kids) {
     else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
     else node.setAttribute(k, v === true ? '' : v);
   }
-  for (const kid of kids.flat()) node.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  for (const kid of kids.flat(Infinity)) {
+    if (kid == null || kid === false) continue;  // an absent optional child draws nothing, not the word "null"
+    node.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  }
   return node;
 }
 function svg(tag, attrs = {}, ...kids) {
   const node = document.createElementNS(SVG, tag);
   for (const [k, v] of Object.entries(attrs)) if (v != null) node.setAttribute(k, v);
-  for (const kid of kids.flat()) node.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  for (const kid of kids.flat(Infinity)) {
+    if (kid == null || kid === false) continue;  // an absent optional child draws nothing, not the word "null"
+    node.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  }
   return node;
 }
 const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
@@ -120,6 +126,7 @@ async function load() {
 const VIEWS = [
   ['flow', 'Flow'],
   ['agents', 'Agents'],
+  ['add', 'Add an agent'],
   ['access', 'Access'],
   ['traffic', 'Traffic'],
   ['check', 'Check a config'],
@@ -146,7 +153,7 @@ function go(view) {
     if (b.dataset.view === view) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
   }
   const main = document.getElementById('main');
-  const render = { flow: viewFlow, agents: viewAgents, access: viewAccess, traffic: viewTraffic, check: viewCheck }[view];
+  const render = { flow: viewFlow, agents: viewAgents, add: viewAdd, access: viewAccess, traffic: viewTraffic, check: viewCheck }[view];
   main.replaceChildren(render());
   if (view === 'traffic' || view === 'flow') pollOnce();
 }
@@ -406,6 +413,197 @@ function resultNodes(r) {
       changes.length ? el('ul', { class: 'result__list' }, changes) : el('p', { class: 'status-line', text: 'The same set of agents.' })),
     el('section', {}, el('h2', { text: 'Review' }), findingsList(r.findings)),
   ];
+}
+
+/* ---- Add an agent: a form that produces the exact YAML to deploy ---- */
+const REGIONS = [
+  ['US', 'https://c01-usa-east.ai-agent-garden.boomi.com'],
+  ['UK', 'https://c01-gbr.ai-agent-garden.boomi.com'],
+  ['Australia and New Zealand', 'https://c01-aus.ai-agent-garden.boomi.com'],
+  ['Japan', 'https://c01-jp.ai-agent-garden.boomi.com'],
+  ['Another address', ''],
+];
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const slugify = (t) => t.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+
+function viewAdd() {
+  const form = el('form', { class: 'builder__form', novalidate: true, 'aria-label': 'New agent' });
+  let slugTouched = false;
+  const id = (n) => 'f-' + n;
+  const input = (n, props = {}) => el('input', { class: 'input', id: id(n), autocomplete: 'off', ...props });
+  const select = (n, options, value) => { const s = el('select', { class: 'input', id: id(n) }, options.map(([v, t]) => el('option', { value: v, text: t }))); if (value) s.value = value; return s; };
+  const field = (n, label, control, hint) => el('div', { class: 'field' }, el('label', { class: 'field__label', for: id(n), text: label }), hint ? el('span', { class: 'field__hint', id: id(n) + '-hint', text: hint }) : null, control);
+  const group = (key, ...kids) => el('div', { class: 'group', 'data-for': key, hidden: true }, kids);
+  const authFields = (p) => [
+    field(p + '-auth', 'Credentials sent to the backend', select(p + '-auth', [['none', 'None'], ['bearer_passthrough', "Forward the caller's bearer token"], ['static_header', 'A fixed header from an environment variable']], 'bearer_passthrough')),
+    el('div', { class: 'group', 'data-auth': p, hidden: true },
+      field(p + '-header', 'Header name', input(p + '-header', { value: 'X-API-Key' })),
+      field(p + '-env', 'Environment variable holding the value', input(p + '-env', { placeholder: 'BACKEND_API_KEY', class: 'input input--code' }), 'Only the variable name goes in the file, never the secret.')),
+  ];
+
+  const skills = el('div', { class: 'skills' });
+  const addSkill = (name = '', description = '') => {
+    const row = el('div', { class: 'skill-row' },
+      el('input', { class: 'input', 'aria-label': 'Skill name', placeholder: 'What it can do, e.g. Look up an invoice', value: name }),
+      el('input', { class: 'input', 'aria-label': 'Skill description (optional)', placeholder: 'Description (optional)', value: description }),
+      el('button', { class: 'button button--quiet', type: 'button', text: 'Remove', 'aria-label': 'Remove this skill', onclick: () => { if (skills.children.length > 1) { row.remove(); schedule(); } } }));
+    skills.append(row);
+  };
+  addSkill();
+
+  const typeRadios = el('fieldset', { class: 'choice' }, el('legend', { text: 'What does this agent run on?' }),
+    [['http_sync', 'A REST call', 'One HTTP request, answered straight away.'], ['http_async', 'A long-running job', 'Start it, then check on it until it finishes.'], ['agentstudio', 'A Boomi Agentstudio agent', 'A deployed Boomi agent, including multi-turn conversations.']]
+      .map(([v, t, h], i) => el('label', { class: 'choice__item' }, el('input', { type: 'radio', name: 'f-type', value: v, checked: i === 0 }), el('span', {}, el('strong', { text: t }), el('span', { class: 'field__hint', text: h })))));
+
+  form.append(
+    field('name', 'Name', input('name', { placeholder: 'Invoice lookup', required: true })),
+    field('slug', 'Address name (slug)', input('slug', { placeholder: 'invoice-lookup', class: 'input input--code' }), 'Used in the address: /agents/<slug>. Lowercase letters, numbers and hyphens.'),
+    field('desc', 'Description', input('desc', { placeholder: 'What this agent does, in one sentence' })),
+    typeRadios,
+    group('http_sync',
+      field('s-url', 'Backend address', input('s-url', { placeholder: 'https://erp.example.com/invoices', type: 'url' })),
+      field('s-method', 'HTTP method', select('s-method', ['POST', 'GET', 'PUT', 'PATCH', 'DELETE'].map((m) => [m, m]), 'POST')),
+      authFields('s')),
+    group('http_async',
+      field('a-url', 'Address that starts the job', input('a-url', { placeholder: 'https://boomi.example.com/ws/rest/export/start', type: 'url' })),
+      field('a-status', 'Address that reports status', input('a-status', { placeholder: 'https://boomi.example.com/ws/rest/export/status/{job_id}', class: 'input input--code' }), 'Must contain {job_id}.'),
+      field('a-jobpath', 'Where the job id is in the start reply', input('a-jobpath', { value: 'executionId', class: 'input input--code' })),
+      field('a-statuspath', 'Where the status is in each status reply', input('a-statuspath', { value: 'status', class: 'input input--code' })),
+      field('a-done', 'Statuses that mean finished', input('a-done', { value: 'COMPLETE' }), 'Comma separated.'),
+      field('a-fail', 'Statuses that mean failed', input('a-fail', { value: 'ERROR, ABORTED' }), 'Comma separated.'),
+      authFields('a'),
+      el('details', { class: 'details' }, el('summary', { text: 'More options' }), el('div', { class: 'details__body' },
+        field('a-result', 'Where the result is in the final reply', input('a-result', { placeholder: 'result', class: 'input input--code' }), 'Leave empty to return the whole reply.'),
+        field('a-cancel', 'Address that stops the job', input('a-cancel', { placeholder: 'https://boomi.example.com/ws/rest/export/cancel/{job_id}', class: 'input input--code' }), 'Called when a caller cancels or the job takes too long.'),
+        field('a-poll', 'Check every (seconds)', input('a-poll', { type: 'number', value: '2', min: '0.1', step: '0.1' })),
+        field('a-max', 'Give up after (seconds)', input('a-max', { type: 'number', value: '300', min: '1' }))))),
+    group('agentstudio',
+      field('g-region', 'Boomi region', select('g-region', REGIONS.map(([t, u]) => [u || 'custom', t]), REGIONS[0][1])),
+      el('div', { class: 'group', 'data-region': 'custom', hidden: true }, field('g-url', 'Execute address', input('g-url', { placeholder: 'https://…', type: 'url' }))),
+      field('g-account', 'Boomi account id', input('g-account')),
+      field('g-deploy', 'Deployment id', input('g-deploy', { class: 'input input--code' }), 'From a production deployment of the agent.'),
+      field('g-mode', 'The agent takes', select('g-mode', [['conversational', 'Free text (a conversation)'], ['structured', 'One JSON object']], 'conversational')),
+      field('g-identity', 'Who calls Boomi', select('g-identity', [['caller', 'Each caller uses their own Boomi token'], ['caller_fallback', 'Each caller, with a shared account as a fallback'], ['service_account', 'One shared service account']], 'caller'), 'Using each caller\'s own token keeps Boomi access control and audit per person.'),
+      el('div', { class: 'group', 'data-identity': 'service', hidden: true },
+        field('g-user', 'Environment variable holding the Boomi username', input('g-user', { placeholder: 'BOOMI_USERNAME', class: 'input input--code' })),
+        field('g-token', 'Environment variable holding the API token', input('g-token', { placeholder: 'BOOMI_API_TOKEN', class: 'input input--code' }), 'Only the variable name goes in the file.')),
+      field('g-blocked', "The agent's guardrail message (optional)", input('g-blocked', { placeholder: "I can't help with that request." }), 'When the agent replies with exactly this, the task is reported as rejected.')),
+    el('div', { class: 'field' }, el('span', { class: 'field__label', id: 'skills-label', text: 'Skills' }), el('span', { class: 'field__hint', text: 'What callers can ask this agent for. Add at least one.' }), skills,
+      el('button', { class: 'button button--quiet', type: 'button', text: 'Add a skill', onclick: () => { addSkill(); schedule(); } })));
+
+  const val = (n) => (document.getElementById(id(n)) || { value: '' }).value.trim();
+  const authOf = (p) => {
+    const mode = val(p + '-auth');
+    if (mode === 'static_header') return { mode, header_name: val(p + '-header') || 'X-API-Key', value: ENV_NAME.test(val(p + '-env')) ? '${' + val(p + '-env') + '}' : '' };
+    return { mode };
+  };
+  const list = (t) => t.split(',').map((x) => x.trim()).filter(Boolean);
+  function collect() {
+    const type = form.querySelector('input[name=f-type]:checked').value;
+    const agent = { slug: val('slug'), name: val('name') };
+    if (val('desc')) agent.description = val('desc');
+    let adapter;
+    if (type === 'http_sync') {
+      adapter = { type, url: val('s-url'), method: val('s-method'), auth: authOf('s') };
+    } else if (type === 'http_async') {
+      adapter = { type, url: val('a-url'), status_url: val('a-status'), job_id_path: val('a-jobpath') || 'executionId', status_path: val('a-statuspath') || 'status', completed_values: list(val('a-done')), failed_values: list(val('a-fail')), poll_interval_seconds: Number(val('a-poll')) || 2, max_poll_seconds: Number(val('a-max')) || 300, auth: authOf('a') };
+      if (val('a-result')) adapter.result_path = val('a-result');
+      if (val('a-cancel')) adapter.cancel_url = val('a-cancel');
+    } else {
+      const region = val('g-region');
+      adapter = { type, deployment_id: val('g-deploy'), execute_url: region === 'custom' ? val('g-url') : region, account_id: val('g-account'), mode: val('g-mode') };
+      const who = val('g-identity');
+      if (who === 'service_account') adapter.identity = 'service_account';
+      if (who === 'caller_fallback') adapter.allow_service_account_fallback = true;
+      if (who !== 'caller') {
+        if (ENV_NAME.test(val('g-user'))) adapter.username = '${' + val('g-user') + '}';
+        if (ENV_NAME.test(val('g-token'))) adapter.api_token = '${' + val('g-token') + '}';
+      }
+      if (val('g-blocked')) adapter.blocked_message = val('g-blocked');
+    }
+    agent.adapter = adapter;
+    const used = new Set();
+    agent.skills = [...skills.querySelectorAll('.skill-row')].map((row, i) => {
+      const [n, d] = row.querySelectorAll('input');
+      let sid = slugify(n.value) || 'skill-' + (i + 1);
+      while (used.has(sid)) sid += '-' + (i + 1);
+      used.add(sid);
+      const skill = { id: sid, name: n.value.trim() };
+      if (d.value.trim()) skill.description = d.value.trim();
+      return skill;
+    }).filter((sk) => sk.name);
+    return agent;
+  }
+
+  const status = el('p', { class: 'status-line', id: 'pv-status', 'aria-live': 'polite', text: 'Fill in the form and the configuration appears here.' });
+  const yamlBox = el('pre', { class: 'code', id: 'pv-yaml', tabindex: '0', 'aria-label': 'Generated configuration' });
+  const details = el('div', { id: 'pv-details', class: 'result' });
+  const copy = el('button', { class: 'button', type: 'button', text: 'Copy configuration', disabled: true });
+  const save = el('button', { class: 'button button--quiet', type: 'button', text: 'Save as file', disabled: true });
+  let latest = null;
+  copy.addEventListener('click', async () => { try { await navigator.clipboard.writeText(latest.yaml); copy.textContent = 'Copied'; } catch { copy.textContent = 'Select the text and copy it'; } setTimeout(() => { copy.textContent = 'Copy configuration'; }, 1800); });
+  save.addEventListener('click', () => {
+    const url = URL.createObjectURL(new Blob([latest.yaml], { type: 'text/yaml' }));
+    const a = el('a', { href: url, download: `agent-${latest.slug}.yaml` }); document.body.append(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  });
+
+  let ticket = 0;
+  let timer = null;
+  const schedule = () => { clearTimeout(timer); timer = setTimeout(check, 350); };
+  async function check() {
+    const mine = ++ticket;
+    const agent = collect();
+    if (!agent.name && !agent.slug) { status.textContent = 'Fill in the form and the configuration appears here.'; yamlBox.textContent = ''; details.replaceChildren(); latest = null; copy.disabled = save.disabled = true; return; }
+    status.textContent = 'Checking…';
+    let r;
+    try { r = await api('agent/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agent }) }); }
+    catch (e) { if (mine === ticket) status.textContent = e instanceof AuthProblem ? 'Your session ended. Sign in again.' : 'Could not check: ' + e.message; return; }
+    if (mine !== ticket) return;  // a newer edit is already being checked
+    const parts = [];
+    latest = r.ok ? r : null;
+    copy.disabled = save.disabled = !r.ok;
+    if (!r.ok) {
+      status.textContent = `${r.errors.length} ${r.errors.length === 1 ? 'problem' : 'problems'} to fix before this can be used.`;
+      yamlBox.textContent = '';
+      parts.push(el('section', {}, el('ul', { class: 'result__list' }, r.errors.map((m) => el('li', { text: m })))));
+    } else {
+      status.textContent = r.slug_taken ? 'This is valid, but the address name is already in use on this proxy.' : 'Valid. This is the configuration to add.';
+      yamlBox.textContent = r.yaml;
+      if (r.slug_taken) parts.push(el('p', { class: 'problem', text: `An agent or remote agent named "${r.slug}" already exists here. Pick a different slug, or the configuration will be rejected.` }));
+      if (r.env.length) parts.push(el('section', {}, el('h3', { text: 'Environment variables this needs' }), el('ul', { class: 'result__list' }, r.env.map((e) => el('li', {}, el('code', { text: e.name }), e.set ? ' is set on this proxy.' : ' is not set on this proxy. Set it wherever the agent will run.')))));
+      if (r.findings.length) parts.push(el('section', {}, el('h3', { text: 'Review' }), findingsList(r.findings)));
+      const cmd = `a2a-bridge tool-spec --config agents.yaml --agent ${r.slug} --out tools/`;
+      parts.push(el('section', {}, el('h3', { text: 'To use it' }),
+        el('ol', { class: 'steps' },
+          el('li', { text: 'Add the configuration above under agents: in your agents.yaml.' }),
+          el('li', {}, 'Give each client that should call it the scope ', el('code', { text: 'agents:' + r.slug }), '.'),
+          el('li', { text: 'Restart or redeploy the proxy.' }),
+          el('li', {}, 'Optional: make it a tool for Boomi agents with ', el('code', { text: cmd }), '.'))));
+    }
+    details.replaceChildren(...parts);
+  }
+
+  const syncVisibility = () => {
+    const type = form.querySelector('input[name=f-type]:checked').value;
+    for (const g of form.querySelectorAll('[data-for]')) g.hidden = g.dataset.for !== type;
+    for (const g of form.querySelectorAll('[data-auth]')) g.hidden = val(g.dataset.auth + '-auth') !== 'static_header';
+    const region = document.getElementById(id('g-region'));
+    for (const g of form.querySelectorAll('[data-region]')) g.hidden = !(region && region.value === 'custom');
+    for (const g of form.querySelectorAll('[data-identity]')) g.hidden = val('g-identity') === 'caller';
+  };
+  form.addEventListener('input', (e) => {
+    if (e.target.id === id('slug')) slugTouched = true;
+    if (e.target.id === id('name') && !slugTouched) document.getElementById(id('slug')).value = slugify(e.target.value);
+    syncVisibility(); schedule();
+  });
+  form.addEventListener('change', () => { syncVisibility(); schedule(); });
+  form.addEventListener('submit', (e) => e.preventDefault());
+  queueMicrotask(syncVisibility);
+
+  return el('div', {},
+    head('Add an agent', 'Describe the agent and get the exact configuration to deploy. Nothing is changed on this proxy: you add the result to your configuration and redeploy.'),
+    el('div', { class: 'builder' }, form,
+      el('section', { class: 'builder__out', 'aria-label': 'Configuration' }, el('h2', { text: 'Configuration' }), status, yamlBox, el('div', { class: 'toolbar' }, copy, save), details)));
 }
 
 /* ---- live updates ---- */

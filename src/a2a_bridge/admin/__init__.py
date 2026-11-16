@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from collections import Counter, defaultdict, deque
 from pathlib import Path
@@ -18,7 +19,9 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from a2a_bridge.admin.graph import build_graph, lint, overview
+import yaml
+
+from a2a_bridge.admin.graph import build_graph, lint, lint_agent, overview
 from a2a_bridge.config import AppConfig, ConfigError, parse_config
 
 STATIC = Path(__file__).parent / "static"
@@ -82,6 +85,35 @@ def _diff(running: AppConfig, proposed: AppConfig) -> dict[str, list[str]]:
     }
 
 
+_ENV_NAME = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}")
+MAX_AGENT_BYTES = 64 * 1024
+
+
+def preview_agent(candidate: Any, config: AppConfig) -> dict[str, Any]:
+    """Check one agent definition and render it as YAML. Reports which ${ENV} names are set where this proxy
+    runs (true/false only, never values), because the agent may be deployed somewhere else."""
+    if not isinstance(candidate, dict):
+        return {"ok": False, "errors": ["the agent must be an object"]}
+    text = yaml.safe_dump({"agents": [candidate]}, sort_keys=False, default_flow_style=False, allow_unicode=True)
+    names = sorted(set(_ENV_NAME.findall(text)))
+    # Unset variables must not fail the check: this proxy is not necessarily where the agent will run.
+    env = {**os.environ, **{n: "placeholder" for n in names if n not in os.environ}}
+    try:
+        parsed = parse_config(text, env)
+    except ConfigError as exc:
+        return {"ok": False, "errors": [line.removeprefix("agents.0.") for line in str(exc).split("; ") if line]}
+    agent = parsed.agents[0]
+    rendered = yaml.safe_dump([candidate], sort_keys=False, default_flow_style=False, allow_unicode=True)
+    return {
+        "ok": True,
+        "yaml": rendered,
+        "slug": agent.slug,
+        "slug_taken": any(a.slug == agent.slug for a in config.agents) or any(r.slug == agent.slug for r in config.remote_agents),
+        "env": [{"name": n, "set": n in os.environ} for n in names],
+        "findings": lint_agent(agent),
+    }
+
+
 def build_admin_routes(config: AppConfig, mounted: set[str], events: EventBuffer) -> list[Route]:
     started = time.time()
 
@@ -139,6 +171,16 @@ def build_admin_routes(config: AppConfig, mounted: set[str], events: EventBuffer
             }
         )
 
+    async def agent_preview(request: Request) -> JSONResponse:
+        body = await request.body()
+        if len(body) > MAX_AGENT_BYTES:
+            return JSONResponse({"error": "agent definition too large"}, status_code=413)
+        try:
+            candidate = json.loads(body)["agent"]
+        except (ValueError, KeyError, TypeError):
+            return JSONResponse({"error": 'send {"agent": {...}}'}, status_code=422)
+        return api(preview_agent(candidate, config))
+
     return [
         Route("/admin", page("index.html", "text/html; charset=utf-8")),
         Route("/admin/", page("index.html", "text/html; charset=utf-8")),
@@ -149,6 +191,7 @@ def build_admin_routes(config: AppConfig, mounted: set[str], events: EventBuffer
         Route("/admin/api/events", get_events),
         Route("/admin/api/stats", get_stats),
         Route("/admin/api/validate", validate, methods=["POST"]),
+        Route("/admin/api/agent/preview", agent_preview, methods=["POST"]),
     ]
 
 

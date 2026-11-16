@@ -1,0 +1,12 @@
+{
+  "name": "a2a-bridge-browser-tests",
+  "private": true,
+  "type": "module",
+  "description": "Drives the control plane in a real Chrome. Needs the demo running: demo/run.sh",
+  "scripts": {
+    "test": "node console.mjs && node add-agent.mjs"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^24.0.0"
+  }
+}

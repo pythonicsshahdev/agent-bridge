@@ -166,6 +166,7 @@ Open `https://your-host/admin` and sign in with a key (or an OIDC token) that ha
 | Agents | What each agent runs on, its backend host, and its entry points. |
 | Access | Sign-in method, rate limit, and each client's scopes and expiry. |
 | Traffic | Recent requests (kept in memory) with result, caller and timing, plus per-agent counts. |
+| Add an agent | A form that adapts to what the agent runs on (a REST call, a long-running job, or a Boomi Agentstudio agent), checks it against the same rules the proxy uses as you type, and shows the exact YAML to copy or save. It also tells you which `${ENV}` variables it needs and whether they are set here, and what to do next. |
 | Check a config | Paste a configuration to see every problem, what would change compared with the running proxy, and anything risky. Nothing is applied. |
 
 Built to be safe to leave on:
@@ -173,7 +174,8 @@ Built to be safe to leave on:
 - **Nothing sensitive is shown:** no tokens, key hashes, header values, or URL paths (which can carry secrets), only host names. A test plants secrets everywhere and asserts none appear in any response.
 - **Strict browser policy:** the page is served with a Content-Security-Policy that allows no inline script, no outside origins and no framing. Server data is only ever written as text, never as markup (tested with hostile strings).
 - **Audited:** admin requests appear in the audit log like any other.
-- **Read only:** it cannot change the running proxy. Apply changes through your normal deploy.
+- **Read only:** it cannot change the running proxy. "Add an agent" produces configuration for you to deploy; it never registers anything by itself. Apply changes through your normal deploy.
+- **Secrets stay out of files:** the form only accepts environment variable *names* for credentials and writes `${NAME}`. It reports whether a variable is set, never its value.
 
 If the proxy is reachable from the internet, restrict `/admin` at your load balancer (an IP allow-list or VPN) as well.
 
@@ -199,6 +201,8 @@ The production image is `docker build --target prod .` (non-root, pinned depende
 For AWS (EC2 + ALB + WAF + Secrets Manager + CloudWatch, optional RDS), see [`deploy/aws`](deploy/aws/README.md).
 
 ## Tests
+
+Python tests run with `.venv/bin/python -m pytest`. The control plane also has browser tests that drive a real Chrome against the demo (`demo/run.sh`, then `cd tests/browser && npm install && npm test`); CI runs both.
 
 ```bash
 .venv/bin/python -m pytest
