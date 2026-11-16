@@ -277,3 +277,8 @@ def test_admin_works_when_a_single_agent_is_also_mounted_at_the_root(tmp_path):
         assert c.get("/admin/api/overview", headers=ADMIN).status_code == 200
         assert c.get("/.well-known/agent-card.json").status_code == 200  # the root agent still works
         assert c.get("/healthz").status_code == 200
+
+
+def test_the_flow_map_does_not_draw_admin_only_clients_as_callers(client):
+    nodes = {n["id"] for n in client.get("/admin/api/diagram", headers=ADMIN).json()["nodes"]}
+    assert "caller:crm" in nodes and "caller:ops" not in nodes

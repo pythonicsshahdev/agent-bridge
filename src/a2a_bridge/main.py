@@ -209,7 +209,44 @@ def tool_spec(argv: list[str]) -> None:
     )
 
 
+def guide(argv: list[str]) -> None:
+    from pathlib import Path
+
+    from a2a_bridge.guide import TRANSPARENT_PNG, build_flows, flows_js, logo_data_uri, render_guide
+
+    parser = argparse.ArgumentParser(
+        prog="a2a-bridge guide",
+        description="Generate an animated walkthrough of this configuration from a field-guide template you provide.",
+    )
+    parser.add_argument("--config", default=os.environ.get("A2A_BRIDGE_CONFIG", "agents.yaml"))
+    parser.add_argument("--template", help="field-guide template (an HTML file with a `const FLOWS = [...]` array); not included")
+    parser.add_argument("--customer", default="Your organisation", help="name shown in the page")
+    parser.add_argument("--logo", help="optional .png, .jpg or .svg for the header")
+    parser.add_argument("--out", default="guide.html")
+    parser.add_argument("--data-only", action="store_true", help="write just the flow data as a JS array, no template needed")
+    args = parser.parse_args(argv)
+    try:
+        flows = build_flows(load_config(args.config), args.customer)
+    except ConfigError as exc:
+        sys.exit(f"a2a-bridge: configuration error: {exc}")
+    out = Path(args.out)
+    if args.data_only:
+        out.write_text("const FLOWS = " + flows_js(flows) + ";\n", encoding="utf-8")
+    else:
+        if not args.template:
+            sys.exit("a2a-bridge: --template is required (a template is not included with this project); use --data-only to get just the flows")
+        try:
+            logo = logo_data_uri(Path(args.logo)) if args.logo else TRANSPARENT_PNG
+            out.write_text(render_guide(Path(args.template).read_text(encoding="utf-8"), flows, args.customer, logo), encoding="utf-8")
+        except (OSError, ValueError) as exc:
+            sys.exit(f"a2a-bridge: {exc}")
+    print(f"wrote {out} ({len(flows)} sections)")
+
+
 def main() -> None:
+    if sys.argv[1:2] == ["guide"]:
+        guide(sys.argv[2:])
+        return
     if sys.argv[1:2] == ["keygen"]:
         keygen()
         return

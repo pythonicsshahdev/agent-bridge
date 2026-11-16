@@ -1,0 +1,43 @@
+# DEMO ONLY. Throwaway keys (published in this repo), bound to localhost, talking to the bundled mock backends.
+# Never reuse these keys or this file for anything real.
+server:
+  host: "127.0.0.1"
+  port: 8013
+  database_url: "sqlite+aiosqlite:///demo/demo.db"
+  public_base_url: "http://localhost:8013"
+  admin: {enabled: true}
+  inbound_auth:
+    clients:
+      - {id: ops,         key_sha256: "ac5bb3526d3be432ba19fb1fc0712d350c160bd2169cd24401c9fcaeaac2d860", scopes: ["admin:*"]}
+      - {id: crm-agent,   key_sha256: "0a09661d177ef24293fd75fdf3a6516157782e4625aa440e2e5be7c879560177", scopes: ["agents:*"]}
+      - {id: billing-bot, key_sha256: "6722d7086c160010c96652d4b675031a8d07eb3664c2bdb74b74bd003aee2433", scopes: ["agents:orders"], expires_at: "2030-06-30T00:00:00Z"}
+agents:
+  - slug: orders
+    name: Order Fulfilment
+    description: Creates orders through a Boomi web-services listener.
+    adapter: {type: http_sync, url: "http://127.0.0.1:9013/ws/simple/createOrder", auth: {mode: bearer_passthrough}}
+    skills: [{id: create, name: Create order, description: Creates an order from a structured request.}]
+  - slug: export
+    name: Nightly Export
+    description: A long-running export job, started and polled.
+    adapter:
+      type: http_async
+      url: "http://127.0.0.1:9013/ws/simple/startExport"
+      status_url: "http://127.0.0.1:9013/ws/simple/exportStatus/{job_id}"
+      cancel_url: "http://127.0.0.1:9013/ws/simple/exportCancel/{job_id}"
+      job_id_path: executionId
+      result_path: result
+      completed_values: [COMPLETE]
+      failed_values: [ERROR, ABORTED]
+      poll_interval_seconds: 0.3
+      auth: {mode: bearer_passthrough}
+    skills: [{id: run, name: Run export, description: Runs the export and returns the file details.}]
+  - slug: it-support
+    name: IT Support Assistant
+    description: First-line IT support on Boomi Agentstudio (not called in this demo).
+    adapter: {type: agentstudio, deployment_id: "11111111-1111-1111-1111-111111111111", execute_url: "https://c01-usa-east.ai-agent-garden.boomi.com", account_id: demo-account}
+    skills: [{id: triage, name: Triage an IT issue, description: Diagnoses a problem and files a ticket.}]
+remote_agents:
+  - slug: partner-fulfilment
+    card_url: "https://partner.example.com/agents/fulfilment/.well-known/agent-card.json"
+    auth: {mode: bearer_passthrough}

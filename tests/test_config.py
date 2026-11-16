@@ -123,3 +123,10 @@ def test_aws_deploy_example_loads_with_instance_provided_env():
     cfg = parse_config(text, env=env)
     assert cfg.server.base_url == "https://a2a.example.com" and cfg.server.forwarded_allow_ips == "*"
     assert cfg.agents[0].adapter.identity == "caller"
+
+
+def test_demo_config_loads_and_is_local_only():
+    cfg = load_config(EXAMPLE.parent / "demo" / "agents.demo.yaml", env={})
+    assert cfg.server.host == "127.0.0.1" and cfg.server.admin.enabled
+    assert {c.id for c in cfg.server.inbound_auth.clients} == {"ops", "crm-agent", "billing-bot"}
+    assert next(c for c in cfg.server.inbound_auth.clients if c.id == "ops").scopes == ["admin:*"]

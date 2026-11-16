@@ -2,7 +2,7 @@
 
 A declarative **Universal Agent-to-Agent (A2A) proxy**. Describe an agent in YAML and expose a REST API, a webhook or a Boomi process as a compliant A2A 1.0 agent, with no custom glue code.
 
-> **Status: early development.** Config loading, agent cards, the HTTP sync adapter, the Boomi Agentstudio adapter, inbound auth and per-agent mounting work and are tested. The agent-to-agent REST facade and outbound A2A client work and are tested. A read-only web control plane is included. See [CLAUDE.md](CLAUDE.md) for the roadmap.
+> **Status: early development.** Config loading, agent cards, the HTTP sync adapter, the Boomi Agentstudio adapter, inbound auth and per-agent mounting work and are tested. The agent-to-agent REST facade and outbound A2A client work and are tested. A read-only web control plane and a generated animated walkthrough are included. See [CLAUDE.md](CLAUDE.md) for the roadmap.
 
 ## Quickstart
 
@@ -176,6 +176,21 @@ Built to be safe to leave on:
 - **Read only:** it cannot change the running proxy. Apply changes through your normal deploy.
 
 If the proxy is reachable from the internet, restrict `/admin` at your load balancer (an IP allow-list or VPN) as well.
+
+## Animated walkthrough (field guide)
+
+`a2a-bridge guide` turns your real configuration into a shareable, animated walkthrough for demos and reviews: how a request travels, how an Agentstudio conversation continues, how a long job is started and cancelled, and how one agent calls another. Sections appear only when your configuration has the thing to show.
+
+```bash
+a2a-bridge guide --config agents.yaml --template field-guide-template.html --customer "Acme" --logo logo.png --out guide.html
+a2a-bridge guide --config agents.yaml --data-only --out flows.js      # just the flow data, no template needed
+```
+
+The page itself comes from a field-guide template **that you supply** (`--template`); none is included in this project. Any HTML file with a `const FLOWS = [ ... ]` array in the documented node, wire and sequence format works. The generator fills that array, plus `{{CUSTOMER}}` and `{{LOGO_URI}}`, and leaves everything else untouched. If you omit `--logo`, the empty logo box is left out.
+
+- **Built from your configuration:** clients, agents, adapters, remote agents and the sign-in method. Admin-only clients are not shown as callers.
+- **Safe to share:** only host names appear (URL paths can carry secrets), every dynamic value is HTML-escaped, and non-ASCII text is escaped so the file cannot break out of its script.
+- The output embeds your template, so do not commit it if the template is private (`guide*.html` is git-ignored here).
 
 ## Deploying
 

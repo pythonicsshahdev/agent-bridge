@@ -6,3 +6,7 @@ __pycache__/
 .env
 .deploy-test/
 .ui-test/
+demo/demo.db
+demo/proxy.log
+demo/guide.html
+guide*.html

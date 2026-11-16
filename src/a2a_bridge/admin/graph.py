@@ -69,6 +69,11 @@ def describe_inbound(config: AppConfig) -> dict[str, Any]:
     }
 
 
+def agent_callers(config: AppConfig) -> list[Any]:
+    """Clients that may call at least one agent (admin-only clients are managers, not callers)."""
+    return [c for c in config.server.inbound_auth.clients if any(sc.startswith("agents:") for sc in c.scopes)]
+
+
 def lint(config: AppConfig) -> list[dict[str, str]]:
     """Findings an operator should see. `warn` is worth fixing before production; `info` is context."""
     found: list[dict[str, str]] = []
@@ -129,12 +134,13 @@ def build_graph(config: AppConfig, mounted: set[str]) -> dict[str, Any]:
     node("proxy", "proxy", "a2a-bridge", sub, base_url=config.server.base_url, facade=config.server.facade.enabled, sign_in=auth.mode)
 
     caller_ids: list[str] = []
-    for client in auth.clients[:MAX_CALLER_NODES]:
+    callers = agent_callers(config)  # an admin-only client never calls an agent, so it is not drawn as a caller
+    for client in callers[:MAX_CALLER_NODES]:
         cid = f"caller:{client.id}"
         node(cid, "caller", client.id, "API key · " + ", ".join(client.scopes), scopes=client.scopes, keys=len(client.key_sha256))
         caller_ids.append(cid)
-    if len(auth.clients) > MAX_CALLER_NODES:
-        node("caller:more", "caller", f"+{len(auth.clients) - MAX_CALLER_NODES} more clients")
+    if len(callers) > MAX_CALLER_NODES:
+        node("caller:more", "caller", f"+{len(callers) - MAX_CALLER_NODES} more clients")
         caller_ids.append("caller:more")
     if auth.jwt is not None:
         node("caller:oidc", "caller", "OIDC callers", f"issuer {host_of(auth.jwt.issuer) or auth.jwt.issuer}")
