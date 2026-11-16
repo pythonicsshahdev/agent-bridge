@@ -107,3 +107,11 @@ def test_agentstudio_example_loads():
     env["AGENTSTUDIO_EXECUTE_URL"] = "https://c01-usa-east.ai-agent-garden.boomi.com"
     cfg = load_config(EXAMPLE.parent / "agents.agentstudio.example.yaml", env=env)
     assert [a.adapter.mode for a in cfg.agents] == ["conversational", "structured"]
+
+
+def test_mesh_example_loads():
+    env = {k: "x" for k in ("A2A_BRIDGE_API_KEY", "BOOMI_ACCOUNT_ID", "PARTNER_API_KEY", "PARTNER_OAUTH_SECRET")}
+    env["AGENTSTUDIO_EXECUTE_URL"] = "https://c01-usa-east.ai-agent-garden.boomi.com"
+    cfg = load_config(EXAMPLE.parent / "agents.mesh.example.yaml", env=env)
+    assert [r.slug for r in cfg.remote_agents] == ["partner-fulfilment", "partner-pricing"]
+    assert cfg.remote_agents[0].auth.mode == "oauth_client_credentials"

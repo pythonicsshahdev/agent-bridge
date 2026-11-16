@@ -32,7 +32,7 @@ from a2a_bridge.config import ConfigError, InboundAuthConfig, JwtConfig
 logger = logging.getLogger(__name__)
 audit_logger = logging.getLogger("a2a_bridge.audit")
 
-PUBLIC_SUFFIXES = ("/.well-known/agent-card.json",)
+PUBLIC_SUFFIXES = ("/.well-known/agent-card.json", "/openapi.json")  # discovery documents, no secrets
 PUBLIC_PATHS = frozenset({"/healthz"})
 SCOPE_PREFIX = "agents:"
 MAX_CREDENTIAL_CHARS = 8192

@@ -110,6 +110,15 @@ class InboundAuthConfig(_Model):
         return self
 
 
+class FacadeConfig(_Model):
+    """REST facade over A2A, so tools that can only call one HTTP endpoint (e.g. an Agentstudio
+    OpenAPI tool) can reach any agent: POST /agents/{slug}/invoke, GET /agents/{slug}/tasks/{id}."""
+
+    enabled: bool = True
+    default_wait_seconds: float = Field(60, ge=0, le=900)
+    max_wait_seconds: float = Field(300, gt=0, le=900)
+
+
 class ServerConfig(_Model):
     host: str = "0.0.0.0"
     port: int = Field(8000, ge=1, le=65535)
@@ -117,6 +126,7 @@ class ServerConfig(_Model):
     # Externally reachable base URL advertised in agent cards. Falls back to host:port.
     public_base_url: str | None = None
     inbound_auth: InboundAuthConfig = Field(default_factory=InboundAuthConfig)
+    facade: FacadeConfig = Field(default_factory=FacadeConfig)
 
     @field_validator("public_base_url")
     @classmethod
@@ -253,13 +263,57 @@ class AgentConfig(_Model):
         return self
 
 
+class RemoteAuthConfig(_Model):
+    """How the proxy authenticates to a remote A2A agent."""
+
+    mode: Literal["none", "bearer_passthrough", "static_header", "oauth_client_credentials"] = "none"
+    header_name: str = "Authorization"
+    value: str | None = None  # static_header; must reference ${ENV}
+    token_url: str | None = None  # oauth_client_credentials
+    client_id: str | None = None
+    client_secret: str | None = None  # must reference ${ENV}
+    scope: str | None = None
+    audience: str | None = None
+
+    @model_validator(mode="after")
+    def _fields_match_mode(self) -> RemoteAuthConfig:
+        if self.mode == "static_header" and not self.value:
+            raise ValueError("auth.value is required for static_header")
+        if self.mode == "oauth_client_credentials":
+            missing = [f for f in ("token_url", "client_id", "client_secret") if not getattr(self, f)]
+            if missing:
+                raise ValueError(f"oauth_client_credentials requires: {', '.join(missing)}")
+            _check_http_url(self.token_url or "")
+        return self
+
+
+class RemoteAgentConfig(_Model):
+    """An external A2A agent (another a2a-bridge, Boomi, or any A2A server) reachable through the facade."""
+
+    slug: str = Field(pattern=r"^[a-z0-9][a-z0-9-]*$")
+    card_url: str
+    allow_insecure_http: bool = False  # plain http only for local testing
+    auth: RemoteAuthConfig = Field(default_factory=RemoteAuthConfig)
+    timeout_seconds: float = Field(30, gt=0, le=600)  # per HTTP call, not per task
+    card_refresh_seconds: float = Field(300, ge=10)
+
+    @model_validator(mode="after")
+    def _https(self) -> RemoteAgentConfig:
+        _check_http_url(self.card_url)
+        urls = [self.card_url] + ([self.auth.token_url] if self.auth.token_url else [])
+        if not self.allow_insecure_http and any(not u.startswith("https://") for u in urls):
+            raise ValueError("card_url and token_url must be https:// (set allow_insecure_http for local testing)")
+        return self
+
+
 class AppConfig(_Model):
     server: ServerConfig = Field(default_factory=ServerConfig)
     agents: list[AgentConfig] = Field(min_length=1)
+    remote_agents: list[RemoteAgentConfig] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _unique_slugs(self) -> AppConfig:
-        slugs = [a.slug for a in self.agents]
+        slugs = [a.slug for a in self.agents] + [r.slug for r in self.remote_agents]
         dupes = sorted({s for s in slugs if slugs.count(s) > 1})
         if dupes:
             raise ValueError(f"duplicate agent slugs: {dupes}")
@@ -322,6 +376,18 @@ def _reject_literal_credentials(raw: Any) -> None:
             raise ConfigError(f"agent '{slug}': auth.value must reference an environment variable, e.g. ${{MY_KEY}}")
 
 
+def _reject_literal_remote_secrets(raw: dict) -> None:
+    for remote in raw.get("remote_agents") or []:
+        auth = (remote or {}).get("auth") or {}
+        for field in ("value", "client_secret"):
+            value = auth.get(field)
+            needed = (field == "value" and auth.get("mode") == "static_header") or field == "client_secret"
+            if needed and isinstance(value, str) and not _ENV_REF.search(value):
+                raise ConfigError(
+                    f"remote agent '{remote.get('slug', '?')}': auth.{field} must reference an environment variable, e.g. ${{MY_SECRET}}"
+                )
+
+
 def parse_config(text: str, env: Mapping[str, str] | None = None) -> AppConfig:
     try:
         raw = yaml.safe_load(text)
@@ -330,6 +396,7 @@ def parse_config(text: str, env: Mapping[str, str] | None = None) -> AppConfig:
     if not isinstance(raw, dict):
         raise ConfigError("config root must be a mapping with an 'agents' list")
     _reject_literal_credentials(raw)
+    _reject_literal_remote_secrets(raw)
     try:
         return AppConfig.model_validate(expand_env(raw, env))
     except ValidationError as exc:

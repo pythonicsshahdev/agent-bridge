@@ -21,18 +21,31 @@ from starlette.routing import Mount
 from a2a_bridge.adapters import create_adapter
 from a2a_bridge.adapters.base import BaseAdapter
 from a2a_bridge.adapters.session_store import SessionStore, SqlSessionStore
-from a2a_bridge.config import AgentConfig, AppConfig, load_config
+from a2a_bridge.client import RemoteTarget
+from a2a_bridge.config import AgentConfig, AppConfig, ConfigError, RemoteAgentConfig, load_config
 from a2a_bridge.core.card_builder import build_agent_card
 from a2a_bridge.core.executor import BridgeExecutor
+from a2a_bridge.core.facade import LocalTarget, TargetInfo, build_facade_routes
 from a2a_bridge.security import InboundAuthMiddleware, generate_key, validate_inbound
 
 logger = logging.getLogger("a2a_bridge")
 
 AdapterFactory = Callable[[AgentConfig, SessionStore], BaseAdapter | None]
+RemoteFactory = Callable[[RemoteAgentConfig], RemoteTarget]
 
 
-def create_app(config: AppConfig, adapter_factory: AdapterFactory = create_adapter) -> FastAPI:
+def create_app(
+    config: AppConfig,
+    adapter_factory: AdapterFactory = create_adapter,
+    remote_factory: RemoteFactory = RemoteTarget,
+) -> FastAPI:
     validate_inbound(config.server.inbound_auth)
+    facade = config.server.facade
+    if config.remote_agents and not facade.enabled:
+        raise ConfigError("remote_agents need server.facade.enabled: true")
+    inbound = config.server.inbound_auth
+    base_url = config.server.base_url
+    remotes: list[RemoteTarget] = []
     engine = create_async_engine(config.server.database_url)
     task_store = DatabaseTaskStore(engine)
     session_store = SqlSessionStore(engine)
@@ -54,7 +67,15 @@ def create_app(config: AppConfig, adapter_factory: AdapterFactory = create_adapt
             card = build_agent_card(agent, config.server.base_url, mount_path, config.server.inbound_auth)
             handler = DefaultRequestHandler(agent_executor=executor, task_store=task_store, agent_card=card)
             routes = create_agent_card_routes(card) + create_jsonrpc_routes(handler, rpc_url="/rpc", enable_v0_3_compat=True)
+            if facade.enabled and mount_path:
+                info = TargetInfo(agent.name, agent.description or agent.name, [(sk.name, sk.description) for sk in agent.skills])
+                routes += build_facade_routes(agent.slug, LocalTarget(handler, info), facade, base_url, inbound)
             mounts.append(Mount(mount_path, routes=routes))
+
+    for remote_config in config.remote_agents:
+        remote = remote_factory(remote_config)
+        remotes.append(remote)
+        mounts.append(Mount(f"/agents/{remote_config.slug}", routes=build_facade_routes(remote_config.slug, remote, facade, base_url, inbound)))
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -65,6 +86,8 @@ def create_app(config: AppConfig, adapter_factory: AdapterFactory = create_adapt
         finally:
             for adapter in adapters:
                 await adapter.aclose()
+            for remote in remotes:
+                await remote.aclose()
             await engine.dispose()
 
     app = FastAPI(title="a2a-bridge", lifespan=lifespan)
@@ -79,7 +102,7 @@ def create_app(config: AppConfig, adapter_factory: AdapterFactory = create_adapt
 
     @app.get("/healthz")
     async def healthz() -> JSONResponse:
-        return JSONResponse({"status": "ok", "agents": [a.slug for a in mounted]})
+        return JSONResponse({"status": "ok", "agents": [a.slug for a in mounted], "remote_agents": [r.slug for r in config.remote_agents]})
 
     app.router.routes.extend(mounts)
     return app

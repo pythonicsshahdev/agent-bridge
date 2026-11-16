@@ -2,7 +2,7 @@
 
 A declarative **Universal Agent-to-Agent (A2A) proxy**. Describe an agent in YAML and expose a REST API, a webhook or a Boomi process as a compliant A2A 1.0 agent, with no custom glue code.
 
-> **Status: early development.** Config loading, agent cards, the HTTP sync adapter, the Boomi Agentstudio adapter, inbound auth and per-agent mounting work and are tested. Async job polling, the outbound client and a web UI are planned. See [CLAUDE.md](CLAUDE.md) for the roadmap.
+> **Status: early development.** Config loading, agent cards, the HTTP sync adapter, the Boomi Agentstudio adapter, inbound auth and per-agent mounting work and are tested. The agent-to-agent REST facade and outbound A2A client work and are tested. Async job polling and a web UI are planned. See [CLAUDE.md](CLAUDE.md) for the roadmap.
 
 ## Quickstart
 
@@ -74,6 +74,29 @@ A2A carries JSON numbers as doubles, so whole numbers in a **response** can read
 - In YAML flow style (`{a: b}`), quote env references: `api_token: "${BOOMI_API_TOKEN}"`.
 
 Try it without a Boomi account against the bundled mock Execute API: `uvicorn --app-dir tests/mocks agentstudio_execute:app --port 9100`.
+
+## Agent-to-agent: let Boomi agents call other agents
+
+A Boomi Agentstudio agent can use another agent as a tool through the **REST facade**, because an Agentstudio OpenAPI tool calls one HTTP endpoint and cannot speak JSON-RPC.
+
+```
+Agent A (Agentstudio) -> OpenAPI tool -> POST /agents/<slug>/invoke -> local or remote A2A agent
+```
+
+| Endpoint | What it does |
+|---|---|
+| `POST /agents/{slug}/invoke` | `{"message": "...", "data": {...}, "context_id": "...", "task_id": "...", "wait_seconds": 60}`. Waits for an outcome, or returns `working` with a `task_id`. |
+| `GET /agents/{slug}/tasks/{task_id}?wait_seconds=30` | Poll a running task. |
+| `POST /agents/{slug}/tasks/{task_id}/cancel` | Cancel it. |
+| `GET /agents/{slug}/openapi.json` | OpenAPI 3 description (public, no secrets), written so an LLM can decide when to call the agent. |
+
+The reply is a small summary: `state` (`completed`, `working`, `failed`, `rejected`, `input_required`, `auth_required`, `canceled`), `text`, `data`, `message` (the reason, or the question the agent is asking), and `task_id` / `context_id`. Send the same `context_id` to continue a conversation. To answer an `input_required` task, send the `task_id` as well.
+
+- **Same rules everywhere.** The facade uses the same auth, scopes, task isolation and executors as the A2A endpoint, so calling `/agents/B/invoke` needs the `agents:B` scope, and callers only see their own tasks.
+- **Local and remote agents** share one endpoint. Register external A2A agents under `remote_agents:` (see [`agents.mesh.example.yaml`](agents.mesh.example.yaml)). Their card is fetched lazily and refreshed on a TTL, and an unreachable remote is a 502, not a startup failure.
+- **Outbound auth to a remote agent:** `none`, `bearer_passthrough` (forward the caller's token), `static_header`, or `oauth_client_credentials` (token cached until shortly before it expires). Secrets must come from `${ENV}`, and remote URLs must be `https://`.
+- **Error mapping:** 401/403 from the proxy's own auth, 404 unknown or foreign task, 422 bad request, 502 remote unreachable or rejected our credentials, 504 remote timed out.
+- Set `server.facade.enabled: false` to turn the facade off.
 
 ## Security
 

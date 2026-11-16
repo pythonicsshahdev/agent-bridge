@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from contextlib import aclosing
-from typing import Any
 
 from a2a.helpers.proto_helpers import get_data_parts, new_data_part, new_task_from_user_message, new_text_part
 from a2a.server.agent_execution import AgentExecutor, RequestContext
@@ -12,6 +11,7 @@ from a2a.server.events.event_queue_v2 import EventQueue
 from a2a.server.tasks import TaskUpdater
 from a2a.types.a2a_pb2 import Part, TaskState
 
+from a2a_bridge.core.values import restore_ints
 from a2a_bridge.adapters.base import AdapterResult, AdapterState, BaseAdapter, TaskContext
 
 logger = logging.getLogger(__name__)
@@ -20,20 +20,6 @@ _INTERRUPTED = {
     AdapterState.INPUT_REQUIRED: "requires_input",
     AdapterState.AUTH_REQUIRED: "requires_auth",
 }
-
-
-def _restore_ints(value: Any) -> Any:
-    """protobuf Value stores every number as a double; give whole numbers back as ints (2.0 -> 2).
-
-    Backends with strict schemas (Boomi profiles, typed APIs) often reject 2.0 where 2 is expected.
-    """
-    if isinstance(value, float) and value.is_integer() and abs(value) < 2**53:
-        return int(value)
-    if isinstance(value, dict):
-        return {k: _restore_ints(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_restore_ints(v) for v in value]
-    return value
 
 
 def build_task_context(agent_slug: str, context: RequestContext) -> TaskContext:
@@ -45,7 +31,7 @@ def build_task_context(agent_slug: str, context: RequestContext) -> TaskContext:
         context_id=context.context_id or "",
         principal=context.call_context.user.user_name if context.call_context else "",
         text=context.get_user_input(),
-        data=_restore_ints(get_data_parts(message.parts)) if message else [],
+        data=restore_ints(get_data_parts(message.parts)) if message else [],
         headers={k.lower(): v for k, v in headers.items()},
         metadata=dict(context.metadata),
     )

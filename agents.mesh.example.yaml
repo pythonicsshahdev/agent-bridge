@@ -1,0 +1,41 @@
+# Agent mesh: let Boomi agents call other agents, and expose your agents to everyone else.
+#   Boomi Agentstudio agent  ->  POST /agents/<slug>/invoke  ->  any local or remote A2A agent
+# Environment: A2A_BRIDGE_API_KEY, AGENTSTUDIO_EXECUTE_URL, BOOMI_ACCOUNT_ID, PARTNER_API_KEY, PARTNER_OAUTH_SECRET
+server:
+  inbound_auth:
+    api_keys: ["${A2A_BRIDGE_API_KEY}"]
+  facade:
+    enabled: true
+    default_wait_seconds: 60     # how long /invoke waits for an outcome before returning state "working"
+    max_wait_seconds: 300
+
+agents:
+  # A Boomi Agentstudio agent served here. Callers bring their own Boomi token (X-Boomi-Authorization).
+  - slug: "it-support"
+    name: "IT Support Assistant"
+    description: "First-line IT support."
+    adapter:
+      type: "agentstudio"
+      deployment_id: "11111111-1111-1111-1111-111111111111"
+      execute_url: "${AGENTSTUDIO_EXECUTE_URL}"
+      account_id: "${BOOMI_ACCOUNT_ID}"
+    skills:
+      - {id: "triage", name: "Triage an IT issue", description: "Diagnoses a problem and files a ticket."}
+
+# External A2A agents (another a2a-bridge, a partner, anything that serves an agent card).
+# They appear at the same /agents/<slug>/invoke endpoint as local agents.
+remote_agents:
+  - slug: "partner-fulfilment"
+    card_url: "https://partner.example.com/agents/fulfilment/.well-known/agent-card.json"
+    auth:
+      mode: "oauth_client_credentials"      # none | bearer_passthrough | static_header | oauth_client_credentials
+      token_url: "https://idp.partner.example.com/oauth/token"
+      client_id: "our-service"
+      client_secret: "${PARTNER_OAUTH_SECRET}"
+      scope: "a2a"
+    timeout_seconds: 30            # per HTTP call
+    card_refresh_seconds: 300
+
+  - slug: "partner-pricing"
+    card_url: "https://pricing.example.com/.well-known/agent-card.json"
+    auth: {mode: "static_header", header_name: "X-API-Key", value: "${PARTNER_API_KEY}"}
