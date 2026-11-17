@@ -16,8 +16,9 @@ agents:
 
 
 def test_example_loads():
-    cfg = load_config(EXAMPLE, env={"BOOMI_EXPORT_API_KEY": "k", "A2A_BRIDGE_API_KEY": "bridge-key"})
-    assert [a.slug for a in cfg.agents] == ["boomi-order-sync", "boomi-batch-export"]
+    cfg = load_config(EXAMPLE, env={"BOOMI_EXPORT_API_KEY": "k", "A2A_BRIDGE_API_KEY": "bridge-key", "LLM_API_KEY": "l"})
+    assert [a.slug for a in cfg.agents] == ["boomi-order-sync", "boomi-batch-export", "research-assistant", "order-tools"]
+    assert [a.adapter.type for a in cfg.agents[2:]] == ["openai_chat", "mcp"]
     first = cfg.agents[0]
     assert first.adapter.type == "http_sync"
     assert first.adapter.auth.mode == "bearer_passthrough"
