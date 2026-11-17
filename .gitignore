@@ -10,3 +10,4 @@ demo/demo.db
 demo/proxy.log
 demo/guide.html
 guide*.html
+.live-test/

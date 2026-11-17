@@ -25,7 +25,7 @@ Run the first apply in a non-production account, and start with `waf_mode = "cou
 ## Before you apply
 
 1. **A domain and certificate.** Either a Route 53 hosted zone (set `route53_zone_id`; the certificate is requested and validated for you) or an existing ACM certificate in the same region (`certificate_arn`).
-2. **An image the instance can pull.** Tag a release (`git tag v0.1.0 && git push --tags`) and the `release` workflow publishes `ghcr.io/<owner>/agent-bridge:0.1.0`. The instance pulls anonymously, so the package must be public, or adapt `prestart.sh` for a private registry or ECR.
+2. **An image the instance can pull.** Tag a release (`git tag v0.2.0 && git push --tags`) and the `release` workflow publishes `ghcr.io/<owner>/agent-bridge:0.2.0` (the image tag has no `v`). The instance pulls anonymously, so the package must be public, or adapt `prestart.sh` for a private registry or ECR.
 3. **A config file** based on [`agents.example.yaml`](agents.example.yaml). It is stored in an SSM parameter in plain text, so it holds no secrets: client keys are SHA-256 hashes (`a2a-bridge keygen`), and anything sensitive is a `${ENV}` reference.
 
 ## Deploy

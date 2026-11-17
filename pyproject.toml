@@ -1,6 +1,6 @@
 [project]
 name = "a2a-bridge"
-version = "0.1.0"
+version = "0.2.0"
 description = "Declarative Universal A2A proxy: expose REST APIs, Boomi processes and agents as A2A agents from YAML."
 requires-python = ">=3.11"
 license = "MIT"
