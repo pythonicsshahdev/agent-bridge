@@ -385,3 +385,40 @@ def test_preview_is_admin_only_and_validates_its_input(client):
     assert client.post("/admin/api/agent/preview", json={"agent": "text"}, headers=ADMIN).json()["ok"] is False
     big = {"agent": {**REST_AGENT, "description": "x" * 70_000}}
     assert client.post("/admin/api/agent/preview", json=big, headers=ADMIN).status_code == 413
+
+
+# ---------------------------------------------------------------- bundled fonts
+
+
+def test_bundled_fonts_are_served_without_signing_in_with_the_right_type_and_policy(client):
+    names = ["poppins-latin-400-normal.woff2", "poppins-latin-600-normal.woff2", "jetbrains-mono-latin-400-normal.woff2"]
+    for name in names:
+        r = client.get(f"/admin/fonts/{name}")
+        assert r.status_code == 200 and r.headers["content-type"] == "font/woff2", name
+        assert r.content[:4] == b"wOF2", "not a real woff2 file"
+        assert "font-src 'self'" in r.headers["content-security-policy"]
+
+
+def test_the_font_route_cannot_be_used_to_read_other_files(client):
+    # The HTTP client collapses a literal "../" before sending, so these are the forms that actually reach the server.
+    probes = [
+        "/admin/fonts/%2e%2e%2fapp.js",
+        "/admin/fonts/%2e%2e/app.js",
+        "/admin/fonts/..%2fapp.js",
+        "/admin/fonts/..%5capp.js",
+        "/admin/fonts/%2fetc%2fpasswd",
+        "/admin/fonts/LICENSE-poppins.txt",  # a real file in the folder, but not a font
+        "/admin/fonts/nope.woff2",
+        "/admin/fonts/POPPINS-LATIN-400-NORMAL.WOFF2",
+        "/admin/fonts/poppins-latin-400-normal.woff2%00.js",
+    ]
+    for path in probes:
+        r = client.get(path)
+        assert r.status_code == 404, f"{path} -> {r.status_code}"
+        assert b"use strict" not in r.content and b"root:" not in r.content and b"Copyright" not in r.content, path
+
+
+def test_the_security_policy_still_allows_nothing_external(client):
+    csp = client.get("/admin").headers["content-security-policy"]
+    assert "font-src 'self'" in csp and "default-src 'none'" in csp
+    assert "unsafe-inline" not in csp and "http" not in csp.replace("https:", "") and "*" not in csp

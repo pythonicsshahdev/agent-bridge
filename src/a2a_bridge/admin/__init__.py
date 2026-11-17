@@ -25,9 +25,11 @@ from a2a_bridge.admin.graph import build_graph, lint, lint_agent, overview
 from a2a_bridge.config import AppConfig, ConfigError, parse_config
 
 STATIC = Path(__file__).parent / "static"
+FONTS = STATIC / "fonts"
+_FONT_NAME = re.compile(r"[a-z0-9-]+\.woff2")
 MAX_VALIDATE_BYTES = 256 * 1024
 # No inline script or style, no external origins, no framing: the page may only talk to this server.
-CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 SECURITY_HEADERS = {
     "Content-Security-Policy": CSP,
     "X-Content-Type-Options": "nosniff",
@@ -181,7 +183,15 @@ def build_admin_routes(config: AppConfig, mounted: set[str], events: EventBuffer
             return JSONResponse({"error": 'send {"agent": {...}}'}, status_code=422)
         return api(preview_agent(candidate, config))
 
+    async def font(request: Request) -> Response:
+        name = request.path_params["name"]
+        path = FONTS / name
+        if not _FONT_NAME.fullmatch(name) or not path.is_file():  # only bundled .woff2 files, never an arbitrary path
+            return Response(status_code=404)
+        return Response(path.read_bytes(), media_type="font/woff2", headers={**SECURITY_HEADERS, "Cache-Control": "public, max-age=31536000, immutable"})
+
     return [
+        Route("/admin/fonts/{name}", font),
         Route("/admin", page("index.html", "text/html; charset=utf-8")),
         Route("/admin/", page("index.html", "text/html; charset=utf-8")),
         Route("/admin/app.js", page("app.js", "text/javascript; charset=utf-8")),

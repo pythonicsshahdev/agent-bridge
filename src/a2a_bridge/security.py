@@ -198,7 +198,7 @@ def validate_inbound(auth: InboundAuthConfig) -> None:
 
 
 def _is_public(path: str) -> bool:
-    return path in PUBLIC_PATHS or path.endswith(PUBLIC_SUFFIXES)
+    return path in PUBLIC_PATHS or path.endswith(PUBLIC_SUFFIXES) or path.startswith("/admin/fonts/")
 
 
 def _is_admin_path(path: str) -> bool:

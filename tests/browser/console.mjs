@@ -51,6 +51,61 @@ let lit = false;
 for (let i = 0; i < 80 && !lit; i++) { lit = await page.$eval('[data-edge="proxy>agent:orders"]', (e) => e.classList.contains('wire--ok')).catch(() => false); if (!lit) await sleep(100); }
 ok('a new request pulses its wire', lit);
 
+// ---- ambient motion on the flow map
+await page.click('[data-view=flow]'); await sleep(500);
+const haloCount = await page.$$eval('.node__halo', (h) => h.length);
+const runningNodes = await page.$$eval('.node--proxy, .node--agent:not(.node--down)', (n) => n.length);
+ok('running components (proxy and live agents) have a pulsing ring, others do not', haloCount === runningNodes && haloCount >= 2, `${haloCount} rings for ${runningNodes} running nodes`);
+const anim = await page.evaluate(() => ({
+  wire: getComputedStyle(document.querySelector('.wire:not(.wire--dashed)')).animationName,
+  dashed: getComputedStyle(document.querySelector('.wire--dashed')).animationName,
+  halo: getComputedStyle(document.querySelector('.node__halo')).animationName,
+}));
+ok('wires and rings are animated by default', anim.wire === 'wire-flow' && anim.dashed === 'wire-flow-dashed' && anim.halo === 'halo', JSON.stringify(anim));
+const offset = () => page.evaluate(() => getComputedStyle(document.querySelector('.wire:not(.wire--dashed)')).strokeDashoffset);
+const o1 = await offset(); await sleep(350); const o2 = await offset();
+ok('the dashes actually move (dash offset changes over time)', o1 !== o2, `${o1} -> ${o2}`);
+await page.screenshot({ path: `${SHOTS}/flow-motion-a.png`, clip: { x: 216, y: 100, width: 1180, height: 330 } });
+await sleep(900);
+await page.screenshot({ path: `${SHOTS}/flow-motion-b.png`, clip: { x: 216, y: 100, width: 1180, height: 330 } });
+
+await page.click('.map__bar button'); await sleep(300);
+const paused = await page.evaluate(() => ({
+  mode: document.getElementById('flow-map').dataset.motion,
+  wire: getComputedStyle(document.querySelector('.wire')).animationName,
+  halo: getComputedStyle(document.querySelector('.node__halo')).display,
+  label: document.querySelector('.map__bar button').textContent,
+  pressed: document.querySelector('.map__bar button').getAttribute('aria-pressed'),
+}));
+ok('Pause animation stops the wires and hides the rings', paused.mode === 'off' && paused.wire === 'none' && paused.halo === 'none', JSON.stringify(paused));
+ok('the button now offers to play, and says so to screen readers', paused.label === 'Play animation' && paused.pressed === 'false');
+await page.click('[data-view=agents]'); await sleep(300); await page.click('[data-view=flow]'); await sleep(400);
+ok('the choice to pause is remembered when you leave and come back', (await page.$eval('#flow-map', (e) => e.dataset.motion)) === 'off');
+await page.click('.map__bar button'); await sleep(300);
+ok('Play animation turns it back on', (await page.$eval('#flow-map', (e) => e.dataset.motion)) === 'on' && (await page.$eval('.wire', (e) => getComputedStyle(e).animationName)) === 'wire-flow');
+
+// a real request flashes, then the ambient flow resumes
+await page.evaluate(() => fetch('/agents/orders/invoke', { method: 'POST', headers: { 'X-API-Key': 'demo-crm-key', Authorization: 'Bearer d', 'Content-Type': 'application/json' }, body: '{"data":{"sku":"M"}}' }));
+let flashed = false, boxHit = false;
+for (let i = 0; i < 80 && !(flashed && boxHit); i++) {
+  flashed = flashed || await page.$eval('[data-edge="proxy>agent:orders"]', (e) => e.classList.contains('wire--ok')).catch(() => false);
+  boxHit = boxHit || await page.$eval('[data-node="agent:orders"]', (e) => e.classList.contains('node--hit')).catch(() => false);
+  if (!(flashed && boxHit)) await sleep(100);
+}
+ok('a real request flashes its wire and the agent box', flashed && boxHit, `wire=${flashed} box=${boxHit}`);
+await sleep(2600);
+const resumed = await page.evaluate(() => ({
+  wireClass: document.querySelector('[data-edge="proxy>agent:orders"]').getAttribute('class'),
+  anim: getComputedStyle(document.querySelector('[data-edge="proxy>agent:orders"]')).animationName,
+  box: document.querySelector('[data-node="agent:orders"]').getAttribute('class'),
+}));
+ok('after the flash the wire goes back to its ambient flow', !resumed.wireClass.includes('wire--ok') && resumed.anim === 'wire-flow' && !resumed.box.includes('node--hit'), JSON.stringify(resumed));
+
+const fontsLoaded = await page.evaluate(async () => { await document.fonts.ready; return { poppins: document.fonts.check('600 16px Poppins'), mono: document.fonts.check('400 13px "JetBrains Mono"') }; });
+ok('the bundled fonts load from this server', fontsLoaded.poppins && fontsLoaded.mono, JSON.stringify(fontsLoaded));
+const mapText = await page.evaluate(() => { const l = document.querySelector('.node__label'); const sub = document.querySelector('.node__sub'); const svgEl = document.querySelector('.map svg'); const scale = svgEl.getBoundingClientRect().width / svgEl.viewBox.baseVal.width; return { label: parseFloat(getComputedStyle(l).fontSize) * scale, sub: parseFloat(getComputedStyle(sub).fontSize) * scale }; });
+ok('text on the map is readable at this window size (labels >= 12px, details >= 10px)', mapText.label >= 12 && mapText.sub >= 10, JSON.stringify({ label: +mapText.label.toFixed(1), sub: +mapText.sub.toFixed(1) }));
+
 // ---- agents, access, traffic
 await page.click('[data-view=agents]'); await sleep(300);
 ok('agents table lists all three', (await page.$$('tbody tr')).length >= 4, String((await page.$$('tbody tr')).length));
@@ -87,6 +142,7 @@ await shot('07-check');
 
 // ---- hostile strings never become markup
 await page.click('[data-view=traffic]'); await sleep(400);
+await page.evaluate(() => { state.paused = true; });  // stop the 3 second refresh from replacing the injected rows
 await page.evaluate(() => {
   const hostile = '<img src=x onerror="window.__xss=1"><script>window.__xss=1</script>';
   state.filters = { agent: '', status: '' };
@@ -94,7 +150,9 @@ await page.evaluate(() => {
     { window: 1, agents: { [hostile]: { requests: 1, errors: 0, avg_ms: 1 } }, statuses: {}, callers: {} });
 });
 await sleep(300);
-ok('hostile data is shown as text, not run', (await page.evaluate(() => window.__xss)) === undefined && (await page.$eval('#events', (e) => e.textContent)).includes('<img src=x'));
+const xssFlag = await page.evaluate(() => window.__xss);
+const shownText = await page.$eval('#events', (e) => e.textContent);
+ok('hostile data is shown as text, not run', xssFlag === undefined && shownText.includes('<img src=x'), `xss=${xssFlag} textHasPayload=${shownText.includes('<img src=x')} len=${shownText.length}`);
 ok('no injected elements', (await page.$$('#events img, #events script, #events svg')).length === 0);
 
 // ---- motion, responsive, sign out
@@ -102,6 +160,16 @@ const reduced = await browser.newPage();
 await reduced.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
 await reduced.goto(BASE + '/admin', { waitUntil: 'networkidle0' });
 ok('reduced motion turns pulses off', await reduced.evaluate(() => { const s = document.createElement('div'); s.className = 'wire--ok'; document.body.append(s); const v = getComputedStyle(s).animationName; s.remove(); return v === 'none'; }));
+await reduced.evaluate(() => sessionStorage.setItem('a2a-admin-credential', JSON.stringify({ mode: 'key', value: 'demo-admin-key', header: 'X-API-Key' })));
+await reduced.reload({ waitUntil: 'networkidle0' }); await sleep(700);
+const calm = await reduced.evaluate(() => ({
+  wire: getComputedStyle(document.querySelector('.wire')).animationName,
+  halo: getComputedStyle(document.querySelector('.node__halo')).display,
+  mode: document.getElementById('flow-map').dataset.motion,
+  button: document.querySelector('.map__bar button').textContent,
+  disabled: document.querySelector('.map__bar button').disabled,
+}));
+ok('with reduced motion the map is still, and the pause button explains why', calm.wire === 'none' && calm.halo === 'none' && calm.mode === 'off' && calm.disabled && calm.button === 'Animation off', JSON.stringify(calm));
 await reduced.close();
 const phone = await browser.newPage();
 await phone.setViewport({ width: 390, height: 800 });

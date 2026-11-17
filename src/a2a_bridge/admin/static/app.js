@@ -18,6 +18,15 @@ const state = {
   filters: { agent: '', status: '' },
 };
 
+const REDUCED_MOTION = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+function motionOn() {
+  if (REDUCED_MOTION) return false;
+  try { return sessionStorage.getItem('a2a-motion') !== 'off'; } catch { return true; }
+}
+function setMotion(on) {
+  try { sessionStorage.setItem('a2a-motion', on ? 'on' : 'off'); } catch { /* the choice just lasts for this page */ }
+}
+
 function readStored() {
   try { return JSON.parse(sessionStorage.getItem(KEY_STORE) || 'null'); } catch { return null; }
 }
@@ -55,6 +64,37 @@ function svg(tag, attrs = {}, ...kids) {
 }
 const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 
+/* ---- icons: stroke glyphs on a 24x24 grid, built as DOM (never as HTML strings) ---- */
+const circ = (cx, cy, r) => `M${cx - r} ${cy}a${r} ${r} 0 1 0 ${2 * r} 0a${r} ${r} 0 1 0 ${-2 * r} 0`;
+const ICONS = {
+  flow: [circ(5, 12, 2.3), circ(19, 6, 2.3), circ(19, 18, 2.3), 'M7.2 11.1L16.8 6.9', 'M7.2 12.9L16.8 17.1'],
+  agents: ['M12 3l9 5-9 5-9-5 9-5z', 'M3 12.5l9 5 9-5', 'M3 17l9 5 9-5'],
+  add: [circ(12, 12, 9), 'M12 8v8', 'M8 12h8'],
+  access: ['M12 3l8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6z', 'M9 12l2 2 4-4'],
+  traffic: ['M3 12h4l3-8 4 16 3-8h4'],
+  check: ['M9 4h6a1 1 0 0 1 1 1v1H8V5a1 1 0 0 1 1-1z', 'M8 6H6a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1h-2', 'M9 14l2 2 4-4'],
+  user: [circ(12, 8, 3.6), 'M5 20c0-3.9 3.1-6 7-6s7 2.1 7 6'],
+  hub: [circ(12, 12, 3), 'M12 3v4', 'M12 17v4', 'M3.5 7.5l3.6 2', 'M16.9 14.5l3.6 2', 'M3.5 16.5l3.6-2', 'M16.9 9.5l3.6-2'],
+  bolt: ['M13 2L4 14h7l-1 8 9-12h-7z'],
+  database: ['M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3z', 'M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6', 'M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6'],
+  globe: [circ(12, 12, 9), 'M3 12h18', 'M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9', 'M12 3c-2.5 2.7-3.8 5.7-3.8 9s1.3 6.3 3.8 9'],
+  warn: ['M12 3l10 18H2z', 'M12 10v5', 'M12 18.2v.1'],
+  info: [circ(12, 12, 9), 'M12 11v6', 'M12 7.3v.1'],
+};
+function glyph(name, props = {}) {
+  return svg('g', props, ICONS[name].map((d) => svg('path', { d, fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' })));
+}
+function icon(name, size = 18) { return svg('svg', { viewBox: '0 0 24 24', width: size, height: size, 'aria-hidden': 'true', focusable: 'false' }, glyph(name)); }
+function logo(size = 30, extra = '') {
+  const lines = ['M7 7.5L16.5 9.5', 'M16.5 9.5L12.5 20', 'M7 7.5L12.5 20'];
+  return svg('svg', { class: extra, viewBox: '0 0 26 26', width: size, height: size, 'aria-hidden': 'true', focusable: 'false' },
+    svg('defs', {}, svg('linearGradient', { id: 'logo-g', x1: 0, y1: 0, x2: 1, y2: 1 }, svg('stop', { offset: '0%', 'stop-color': '#ff9a4d' }), svg('stop', { offset: '100%', 'stop-color': '#ff5a0a' }))),
+    lines.map((d) => svg('path', { d, fill: 'none', stroke: '#22d3c5', 'stroke-width': '1.4', 'stroke-opacity': '0.8' })),
+    svg('circle', { cx: 7, cy: 7.5, r: 4, fill: 'url(#logo-g)' }),
+    svg('circle', { cx: 17, cy: 9.5, r: 3.2, fill: '#22d3c5' }),
+    svg('circle', { cx: 12.5, cy: 20, r: 3.6, fill: '#60a5fa' }));
+}
+
 /* ---- API ---- */
 class AuthProblem extends Error {
   constructor(kind) { super(kind); this.kind = kind; }
@@ -85,6 +125,7 @@ function showSignIn(problem) {
   const notice = el('div', { 'aria-live': 'polite' });
   if (problem) notice.append(el('p', { class: 'problem', text: problem }));
   form.append(
+    el('div', { class: 'signin__brand' }, logo(36), el('span', { text: 'a2a-bridge' })),
     el('h1', { text: 'Sign in to the control plane' }),
     el('p', { class: 'signin__lead', text: 'Use a key or token that has the admin scope. It stays in this tab and is cleared when you close it.' }),
     notice,
@@ -101,7 +142,7 @@ function showSignIn(problem) {
     state.credential = { mode: mode.value, value: key.value.trim(), header: header.value.trim() || 'X-API-Key' };
     try { await load(); store(state.credential); start(); } catch (e) { signInFailed(e); }
   });
-  mount(form);
+  mount(el('div', { class: 'signin__wrap' }, form));
   key.focus();
 }
 function signInFailed(e) {
@@ -124,21 +165,21 @@ async function load() {
 
 /* ---- shell ---- */
 const VIEWS = [
-  ['flow', 'Flow'],
-  ['agents', 'Agents'],
-  ['add', 'Add an agent'],
-  ['access', 'Access'],
-  ['traffic', 'Traffic'],
-  ['check', 'Check a config'],
+  ['flow', 'Flow', 'flow'],
+  ['agents', 'Agents', 'agents'],
+  ['add', 'Add an agent', 'add'],
+  ['access', 'Access', 'access'],
+  ['traffic', 'Traffic', 'traffic'],
+  ['check', 'Check a config', 'check'],
 ];
 
 function mount(node) { document.getElementById('app').replaceChildren(node); }
 
 function start() {
   const nav = el('nav', { class: 'rail__nav', 'aria-label': 'Control plane' },
-    VIEWS.map(([id, label]) => el('button', { class: 'rail__link', type: 'button', 'data-view': id, text: label, onclick: () => go(id) })));
+    VIEWS.map(([id, label, ic]) => el('button', { class: 'rail__link', type: 'button', 'data-view': id, onclick: () => go(id) }, icon(ic, 18), el('span', { text: label }))));
   const rail = el('aside', { class: 'rail' },
-    el('div', { class: 'rail__brand' }, el('div', { class: 'rail__name', text: 'a2a-bridge' }), el('div', { class: 'rail__sub', text: 'Control plane, read only' })),
+    el('div', { class: 'rail__brand' }, logo(32, 'rail__logo'), el('div', {}, el('div', { class: 'rail__name', text: 'a2a-bridge' }), el('div', { class: 'rail__sub', text: 'Control plane, read only' }))),
     nav,
     el('div', { class: 'rail__foot' }, el('div', { text: 'Version ' + state.overview.version }),
       el('button', { type: 'button', text: 'Sign out', onclick: () => { store(null); state.credential = null; showSignIn(); } })));
@@ -173,7 +214,8 @@ function copyButton(text) {
 function findingsList(findings) {
   if (!findings.length) return el('p', { class: 'calm', text: 'Nothing to flag in this configuration.' });
   return el('ul', { class: 'findings' }, findings.map((f) => el('li', { class: 'finding finding--' + f.level },
-    el('span', { class: 'finding__level', text: f.level === 'warn' ? 'Fix' : 'Note' }), f.message)));
+    el('span', { class: 'finding__icon' }, icon(f.level === 'warn' ? 'warn' : 'info', 18)),
+    el('span', {}, el('span', { class: 'finding__level', text: f.level === 'warn' ? 'Fix' : 'Note' }), f.message))));
 }
 function flatten(value) {
   if (value == null) return '–';
@@ -189,10 +231,11 @@ const COLUMNS = [
   ['agent', 'Agents'],
   ['backend', 'Backends and remote agents'],
 ];
-const NODE_W = 210;
-const NODE_H = 58;
+const NODE_W = 224;
+const NODE_H = 66;
 const GAP_Y = 22;
-const COL_X = [24, 364, 704, 1044];
+const COL_X = [20, 338, 656, 974];
+const KIND_ICON = { caller: 'user', proxy: 'hub', agent: 'bolt', backend: 'database', remote: 'globe' };
 
 function layout(graph) {
   const columnOf = { caller: 0, proxy: 1, agent: 2, backend: 3, remote: 3 };
@@ -208,18 +251,40 @@ function layout(graph) {
   return { pos, height };
 }
 
+function uptimeText(seconds) {
+  if (seconds < 90) return `${seconds} seconds`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 90) return `${minutes} minutes`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 48 ? `${hours} hours` : `${Math.floor(hours / 24)} days`;
+}
+function statusStrip() {
+  const o = state.overview;
+  const live = o.agents.filter((a) => a.live).length;
+  const pill = (...kids) => el('span', { class: 'pill' }, kids);
+  return el('div', { class: 'strip', role: 'group', 'aria-label': 'Status' },
+    pill(el('span', { class: 'dot', 'aria-hidden': 'true' }), el('strong', { text: 'Running' }), ' for ' + uptimeText(o.uptime_seconds)),
+    pill(el('strong', { text: String(live) }), live === 1 ? ' agent live' : ' agents live'),
+    o.remote_agents.length ? pill(el('strong', { text: String(o.remote_agents.length) }), o.remote_agents.length === 1 ? ' remote agent' : ' remote agents') : null,
+    pill(el('strong', { id: 'pill-requests', text: state.stats ? String(state.stats.window) : '–' }), ' recent requests'));
+}
+
 function viewFlow() {
   const { overview, graph } = state;
   const { pos, height } = layout(graph);
   const width = COL_X[3] + NODE_W + 24;
   const canvas = svg('svg', { viewBox: `0 0 ${width} ${height}`, role: 'group', 'aria-label': 'How requests flow from callers through the proxy to agents and their backends' });
+  canvas.append(svg('defs', {},
+    svg('linearGradient', { id: 'nodefill', x1: 0, y1: 0, x2: 0, y2: 1 }, svg('stop', { offset: '0%', 'stop-color': '#1b2c50' }), svg('stop', { offset: '100%', 'stop-color': '#101b34' })),
+    svg('linearGradient', { id: 'wire-grad', gradientUnits: 'userSpaceOnUse', x1: 0, y1: 0, x2: width, y2: 0 }, svg('stop', { offset: '0%', 'stop-color': '#4f9dff' }), svg('stop', { offset: '100%', 'stop-color': '#2ee6c5' })),
+    svg('linearGradient', { id: 'wire-grad-remote', gradientUnits: 'userSpaceOnUse', x1: 0, y1: 0, x2: width, y2: 0 }, svg('stop', { offset: '0%', 'stop-color': '#a78bfa' }), svg('stop', { offset: '100%', 'stop-color': '#f0abfc' }))));
   COLUMNS.forEach(([, title], i) => canvas.append(svg('text', { class: 'col-title', x: COL_X[i], y: 24 }, title)));
 
   const wires = svg('g');
   for (const e of graph.edges) {
     const a = pos[e.from], b = pos[e.to];
     const x1 = a.x + NODE_W, y1 = a.y + NODE_H / 2, x2 = b.x, y2 = b.y + NODE_H / 2, mx = (x1 + x2) / 2;
-    wires.append(svg('path', { class: 'wire' + (e.style === 'dashed' ? ' wire--dashed' : ''), d: `M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}`, 'data-edge': `${e.from}>${e.to}` }));
+    wires.append(svg('path', { class: 'wire' + (e.style === 'dashed' ? ' wire--dashed' : ''), d: `M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}`, stroke: e.style === 'dashed' ? 'url(#wire-grad-remote)' : 'url(#wire-grad)', 'data-edge': `${e.from}>${e.to}` }));
   }
   canvas.append(wires);
 
@@ -227,14 +292,17 @@ function viewFlow() {
   for (const n of graph.nodes) {
     const p = pos[n.id];
     const down = n.kind === 'agent' && n.detail.live === false;
+    const running = n.kind === 'proxy' || (n.kind === 'agent' && !down);  // we know these are up; callers and backends we do not
     const g = svg('g', {
       class: `node node--${n.kind}${down ? ' node--down' : ''}`, transform: `translate(${p.x} ${p.y})`, tabindex: '0', role: 'button',
       'aria-pressed': state.selected === n.id ? 'true' : 'false', 'aria-label': `${n.label}. ${n.sub}${down ? '. Not running' : ''}`, 'data-node': n.id,
     },
-    svg('rect', { class: 'node__body', width: NODE_W, height: NODE_H, rx: 6 }),
-    svg('rect', { class: 'node__edge', width: 6, height: NODE_H, rx: 3 }),
-    svg('text', { class: 'node__label', x: 18, y: 24 }, clip(n.label, 23)),
-    svg('text', { class: 'node__sub', x: 18, y: 42 }, clip(down ? 'not running: adapter unavailable' : n.sub, 31)),
+    running ? svg('rect', { class: `node__halo halo-d${nodes.childNodes.length % 5}`, width: NODE_W, height: NODE_H, rx: 12, 'aria-hidden': 'true' }) : null,
+    svg('rect', { class: 'node__body', width: NODE_W, height: NODE_H, rx: 12, fill: 'url(#nodefill)' }),
+    svg('circle', { class: 'node__badge', cx: 32, cy: NODE_H / 2, r: 17 }),
+    glyph(KIND_ICON[n.kind], { class: 'node__glyph', transform: `translate(${32 - 10} ${NODE_H / 2 - 10}) scale(0.83)` }),
+    svg('text', { class: 'node__label', x: 58, y: 28 }, clip(n.label, 19)),
+    svg('text', { class: 'node__sub', x: 58, y: 47 }, clip(down ? 'not running: adapter unavailable' : n.sub, 24)),
     svg('title', {}, n.label + (n.sub ? ' - ' + n.sub : '')));
     const choose = () => { state.selected = n.id; go('flow'); };
     g.addEventListener('click', choose);
@@ -248,8 +316,11 @@ function viewFlow() {
   const warns = sorted.filter((f) => f.level === 'warn');
   return el('div', {},
     head('How requests flow', 'Callers on the left, the agents this proxy serves, and where each one sends the work. A wire lights up when a request goes through it.'),
-    el('section', { 'aria-label': 'Flow map' }, el('div', { class: 'map' }, canvas),
-      el('p', { class: 'map__legend', text: 'Solid wires are requests this proxy serves. Dashed wires are remote agents it reaches through the REST facade.' }),
+    statusStrip(),
+    el('section', { 'aria-label': 'Flow map' }, el('div', { class: 'map', 'data-motion': motionOn() ? 'on' : 'off', id: 'flow-map' }, canvas),
+      el('div', { class: 'map__bar' },
+        el('p', { class: 'map__legend', text: 'A pulsing ring means running here. Moving dashes show the direction of requests, and a bright flash means a request just went through. Dashed wires reach remote agents through the REST facade.' }),
+        motionButton()),
       el('p', { class: 'map__hint', text: 'Swipe sideways to see the whole map. The Agents page lists the same information as a table.' })),
     detail ? factsPanel(detail) : el('p', { class: 'status-line', text: 'Select a box to see its details.' }),
     el('section', { class: 'section', 'aria-labelledby': 'find-h' },
@@ -260,6 +331,24 @@ const FACT_LABELS = { live: 'Running', slug: 'Slug', base_url: 'Public address',
 const KIND_LABELS = { caller: 'Caller', proxy: 'Proxy', agent: 'Agent', backend: 'Backend', remote: 'Remote agent' };
 const sentence = (k) => { const t = k.replace(/_/g, ' '); return t.charAt(0).toUpperCase() + t.slice(1); };
 function factValue(v) { return v === true ? 'Yes' : v === false ? 'No' : flatten(v); }
+function motionButton() {
+  const label = (on) => (on ? 'Pause animation' : 'Play animation');
+  const b = el('button', { class: 'button button--quiet', type: 'button', text: label(motionOn()), 'aria-pressed': String(motionOn()), disabled: REDUCED_MOTION });
+  if (REDUCED_MOTION) {
+    b.textContent = 'Animation off';
+    b.title = 'Your system asks for reduced motion.';
+    return b;
+  }
+  b.addEventListener('click', () => {
+    const on = !motionOn();
+    setMotion(on);
+    document.getElementById('flow-map').dataset.motion = on ? 'on' : 'off';
+    b.textContent = label(on);
+    b.setAttribute('aria-pressed', String(on));
+  });
+  return b;
+}
+
 function factsPanel(node) {
   const rows = [['Kind', KIND_LABELS[node.kind] || node.kind], ...Object.entries(node.detail).map(([k, v]) => [FACT_LABELS[k] || sentence(k), factValue(v)])];
   return el('section', { class: 'panel', 'aria-label': 'Details for ' + node.label },
@@ -611,6 +700,9 @@ async function pollOnce() {
   if (!state.credential) return;
   try {
     const [{ events }, stats] = await Promise.all([api('events?limit=200'), api('stats')]);
+    state.stats = stats;
+    const requests = document.getElementById('pill-requests');
+    if (requests) requests.textContent = String(stats.window);
     pulse(events);
     if (state.view === 'traffic') renderTraffic(events, stats);
   } catch (e) {
@@ -630,6 +722,15 @@ function pulse(events) {
       path.classList.remove('wire--ok', 'wire--err');
       void path.getBoundingClientRect();  // restart the animation
       path.classList.add(tone);
+      path.addEventListener('animationend', (ev) => { if (ev.animationName.startsWith('pulse-')) path.classList.remove('wire--ok', 'wire--err'); }, { once: true });
+    }
+    for (const id of [`agent:${e.agent}`, `backend:${e.agent}`]) {
+      const box = document.querySelector(`[data-node="${CSS.escape(id)}"]`);
+      if (!box) continue;
+      box.classList.remove('node--hit', 'node--hit-err');
+      void box.getBoundingClientRect();
+      box.classList.add(e.status >= 400 ? 'node--hit-err' : 'node--hit');
+      box.addEventListener('animationend', (ev) => { if (ev.animationName.startsWith('hit-')) box.classList.remove('node--hit', 'node--hit-err'); }, { once: true, capture: true });
     }
   }
 }
