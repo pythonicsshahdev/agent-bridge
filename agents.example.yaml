@@ -66,3 +66,33 @@ agents:
         name: "Run Export"
         description: "Runs the batch export and returns its result."
         tags: ["boomi", "export"]
+  # Any OpenAI-compatible chat endpoint (LiteLLM, Ollama, vLLM, LangGraph servers). History is kept per caller and context.
+  - slug: "research-assistant"
+    name: "Research Assistant"
+    description: "A chat model behind an OpenAI-compatible endpoint."
+    adapter:
+      type: "openai_chat"
+      url: "https://llm.example.com/v1"
+      model: "llama3.1"
+      auth:
+        mode: "static_header"
+        header_name: "Authorization"
+        value: "Bearer ${LLM_API_KEY}"
+    skills:
+      - id: "chat"
+        name: "Chat"
+        description: "Answers questions and remembers the conversation."
+  # Chosen tools of an MCP server. Only the listed tools can be called.
+  - slug: "order-tools"
+    name: "Order Tools"
+    description: "Order lookup tools exposed by an MCP server."
+    adapter:
+      type: "mcp"
+      url: "https://tools.example.com/mcp"
+      tools: ["search_orders", "get_order"]
+      auth:
+        mode: "bearer_passthrough"
+    skills:
+      - id: "search_orders"
+        name: "Search orders"
+        description: 'Send {"tool": "search_orders", "arguments": {...}}.'

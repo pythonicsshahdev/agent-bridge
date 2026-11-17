@@ -115,6 +115,24 @@ ok('a template that is not JSON is explained and blocks copy', (await status()).
 await page.$eval('#f-s-template', (e) => { e.value = '{"input": "{{prompt}}"}'; e.dispatchEvent(new Event('input', { bubbles: true })); }); await settle();
 ok('an unknown placeholder is reported by the server', (await page.$$eval('.result__list li', (l) => l.some((x) => x.textContent.includes('prompt')))), await status());
 
+// ---- a chat model endpoint
+await page.click('input[name=f-type][value=openai_chat]'); await sleep(200);
+await set('#f-slug', 'assistant-two');
+await page.type('#f-o-url', 'https://llm.example.com/v1'); await page.type('#f-o-model', 'llama3.1'); await settle();
+y = await yamlText();
+ok('a chat endpoint produces an openai_chat agent', (await status()).startsWith('Valid') && y.includes('type: openai_chat') && y.includes('model: llama3.1'), (await status()) + ' | ' + y.slice(0, 40));
+ok('no system prompt field exists (the service owns it)', !(await page.$('#f-o-system')));
+
+// ---- an MCP server
+await page.click('input[name=f-type][value=mcp]'); await sleep(200);
+await page.type('#f-m-url', 'https://tools.example.com/mcp');
+await page.type('#f-m-tools', 'search_orders, get_invoice'); await settle();
+y = await yamlText();
+ok('an MCP server produces an allow-listed mcp agent', (await status()).startsWith('Valid') && y.includes('type: mcp') && y.includes('- search_orders') && y.includes('- get_invoice'), (await status()) + ' | ' + y.slice(0, 40));
+await page.type('#f-m-default', 'not_listed'); await settle();
+ok('a default tool outside the allow-list is rejected', (await page.$$eval('.result__list li', (l) => l.some((x) => x.textContent.includes('default_tool')))), await status());
+await set('#f-m-default', '');
+
 // ---- an agent that already speaks A2A
 await page.click('input[name=f-type][value=remote]'); await sleep(200);
 ok('skills and description hide for a remote agent', !(await page.$eval('#skills-label', (e) => e.offsetParent !== null)) && !(await page.$eval('#f-desc', (e) => e.offsetParent !== null)));

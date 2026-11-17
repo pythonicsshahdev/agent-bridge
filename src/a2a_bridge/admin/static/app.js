@@ -541,7 +541,7 @@ function viewAdd() {
   addSkill();
 
   const typeRadios = el('fieldset', { class: 'choice' }, el('legend', { text: 'What does this agent run on?' }),
-    [['http_sync', 'A REST call', 'One HTTP request, answered straight away.'], ['http_async', 'A long-running job', 'Start it, then check on it until it finishes.'], ['agentstudio', 'A Boomi Agentstudio agent', 'A deployed Boomi agent, including multi-turn conversations.'], ['remote', 'An agent that already speaks A2A', 'Google ADK, LangGraph, CrewAI, another a2a-bridge, or any A2A server. Reached through the REST facade.']]
+    [['http_sync', 'A REST call', 'One HTTP request, answered straight away.'], ['http_async', 'A long-running job', 'Start it, then check on it until it finishes.'], ['agentstudio', 'A Boomi Agentstudio agent', 'A deployed Boomi agent, including multi-turn conversations.'], ['openai_chat', 'A chat model endpoint', 'Anything that serves /v1/chat/completions: LiteLLM, Ollama, vLLM, LangGraph servers. Keeps the conversation for you.'], ['mcp', 'An MCP server', 'Expose chosen tools of an MCP server (HTTP) as an agent.'], ['remote', 'An agent that already speaks A2A', 'Google ADK, LangGraph, CrewAI, another a2a-bridge, or any A2A server. Reached through the REST facade.']]
       .map(([v, t, h], i) => el('label', { class: 'choice__item' }, el('input', { type: 'radio', name: 'f-type', value: v, checked: i === 0 }), el('span', {}, el('strong', { text: t }), el('span', { class: 'field__hint', text: h })))));
 
   form.append(
@@ -556,6 +556,18 @@ function viewAdd() {
       el('details', { class: 'details' }, el('summary', { text: 'My service expects a specific body (LangServe, CrewAI, n8n, …)' }), el('div', { class: 'details__body' },
         field('s-template', 'Request body', el('textarea', { class: 'input input--code', id: id('s-template'), rows: '5', spellcheck: 'false', placeholder: '{"input": "{{text}}", "config": {"configurable": {"thread_id": "{{context_id}}"}}}' }), 'JSON. Fill in {{text}}, {{context_id}}, {{task_id}} or {{data}}. Leave empty to send the message as it is.'),
         field('s-textpath', 'Where the reply text is in the response', input('s-textpath', { placeholder: 'output', class: 'input input--code' }), 'A dotted path such as output.content. Leave empty to return the whole response.')))),
+    group('openai_chat',
+      field('o-url', 'Chat address', input('o-url', { placeholder: 'https://llm.example.com/v1', type: 'url' }), 'The base address ending in /v1, or the full /chat/completions address.'),
+      field('o-model', 'Model name', input('o-model', { placeholder: 'llama3.1', class: 'input input--code' })),
+      authFields('o'),
+      el('details', { class: 'details' }, el('summary', { text: 'More options' }), el('div', { class: 'details__body' },
+        field('o-history', 'Messages remembered per conversation', input('o-history', { type: 'number', value: '20', min: '0', max: '200' }), '0 means every message stands alone. The system prompt belongs to the service, not this proxy.')))),
+    group('mcp',
+      field('m-url', 'MCP server address', input('m-url', { placeholder: 'https://tools.example.com/mcp', type: 'url' })),
+      field('m-tools', 'Tools callers may use', input('m-tools', { placeholder: 'search_orders, get_invoice', class: 'input input--code' }), 'Comma separated. Every other tool on the server stays unreachable.'),
+      field('m-default', 'Tool to use when the message names none (optional)', input('m-default', { class: 'input input--code' })),
+      field('m-text', 'Argument that receives plain message text (optional)', input('m-text', { placeholder: 'query', class: 'input input--code' })),
+      authFields('m')),
     group('remote',
       field('r-card', 'Agent card address', input('r-card', { placeholder: 'https://agent.example.com/.well-known/agent-card.json', type: 'url' }), 'Must be https unless you are testing locally.'),
       field('r-auth', 'Credentials sent to that agent', select('r-auth', [['none', 'None'], ['bearer_passthrough', "Forward the caller's bearer token"], ['static_header', 'A fixed header from an environment variable'], ['oauth_client_credentials', 'OAuth client credentials']], 'none')),
@@ -626,6 +638,14 @@ function viewAdd() {
         try { adapter.request_template = JSON.parse(val('s-template')); } catch { localProblem = 'The request body is not valid JSON.'; }
       }
       if (val('s-textpath')) adapter.response_text_path = val('s-textpath');
+    } else if (type === 'openai_chat') {
+      adapter = { type, url: val('o-url'), model: val('o-model'), auth: authOf('o') };
+      const n = Number(val('o-history'));
+      if (val('o-history') !== '' && n !== 20) adapter.max_history_messages = n;
+    } else if (type === 'mcp') {
+      adapter = { type, url: val('m-url'), tools: list(val('m-tools')), auth: authOf('m') };
+      if (val('m-default')) adapter.default_tool = val('m-default');
+      if (val('m-text')) adapter.text_argument = val('m-text');
     } else if (type === 'http_async') {
       adapter = { type, url: val('a-url'), status_url: val('a-status'), job_id_path: val('a-jobpath') || 'executionId', status_path: val('a-statuspath') || 'status', completed_values: list(val('a-done')), failed_values: list(val('a-fail')), poll_interval_seconds: Number(val('a-poll')) || 2, max_poll_seconds: Number(val('a-max')) || 300, auth: authOf('a') };
       if (val('a-result')) adapter.result_path = val('a-result');

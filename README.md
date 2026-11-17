@@ -83,6 +83,44 @@ Placeholders are `{{text}}`, `{{context_id}}`, `{{task_id}}`, `{{data}}` and `{{
 
 Frameworks that already speak A2A (Google ADK, recent LangGraph and CrewAI releases, another a2a-bridge) need no adapter. Register them under `remote_agents:` (the control plane's Add an agent page has an option for it) and call them through the same facade.
 
+## Chat model endpoints (`openai_chat`)
+
+Anything that serves `/v1/chat/completions` (LiteLLM, Ollama, vLLM, LangGraph servers, hosted APIs) can be an agent. The proxy keeps the conversation per caller and A2A `contextId`, sends it with every turn, and returns the reply as text.
+
+```yaml
+- slug: assistant
+  name: Assistant
+  adapter:
+    type: openai_chat
+    url: https://llm.example.com/v1          # or the full .../chat/completions address
+    model: llama3.1
+    max_history_messages: 20                 # 0 = every turn stands alone
+    parameters: {temperature: 0.2}           # passed through as-is
+    auth: {mode: static_header, header_name: Authorization, value: "Bearer ${LLM_KEY}"}
+  skills: [{id: chat, name: Chat}]
+```
+
+There is deliberately no system-prompt setting: the proxy adds no prompts, so the service behind the endpoint owns its instructions. A content-filter finish becomes `rejected`; upstream errors become `failed`; 401/403 becomes `auth-required`. History is stored in the proxy database, scoped to the caller, so conversations survive restarts and callers never see each other's. Treat that table as message content when you decide on retention.
+
+## MCP servers (`mcp`)
+
+Expose chosen tools of an MCP server (streamable HTTP) as an A2A agent. Only the tools in `tools:` are callable; the rest of the server stays unreachable, and a call to anything else is `rejected` before it is sent.
+
+```yaml
+- slug: calc
+  name: Calculator tools
+  adapter:
+    type: mcp
+    url: https://tools.example.com/mcp
+    tools: [add, echo]                       # the allow-list
+    default_tool: echo                       # optional, for messages that name no tool
+    text_argument: message                   # optional, receives plain message text
+    auth: {mode: bearer_passthrough}
+  skills: [{id: add, name: Add numbers}]
+```
+
+A caller sends one data part: `{"tool": "add", "arguments": {"a": 40, "b": 2}}`. With a single allowed tool, or a `default_tool`, the data part can be just the arguments. Text parts become `text_argument`. The reply text goes back as a text artifact and `structuredContent` as a data artifact; an `isError` result is `failed`. Each task opens a short MCP session and closes it. Stdio servers are not supported: the proxy never starts processes.
+
 ## Long-running jobs (`http_async`)
 
 For backends that start a job and return an id (a Boomi process behind a 202, an export, a batch), `adapter.type: http_async` starts the job, polls a status endpoint, and reports progress as A2A `working` updates. See the second agent in [`agents.example.yaml`](agents.example.yaml).

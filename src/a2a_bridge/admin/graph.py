@@ -25,6 +25,10 @@ def describe_adapter(agent: AgentConfig) -> dict[str, Any]:
     info: dict[str, Any] = {"type": a.type, "target": host_of(a.url if a.type != "agentstudio" else a.execute_url)}
     if a.type in ("http_sync", "http_async"):
         info.update(method=a.method, auth=a.auth.mode)
+    if a.type == "openai_chat":
+        info.update(auth=a.auth.mode, model=a.model, history=a.max_history_messages)
+    if a.type == "mcp":
+        info.update(auth=a.auth.mode, tools=len(a.tools))
     if a.type == "http_async":
         info.update(poll_seconds=a.poll_interval_seconds, max_seconds=a.max_poll_seconds, cancellable=bool(a.cancel_url))
     if a.type == "agentstudio":
@@ -89,7 +93,7 @@ def lint_agent(agent: AgentConfig) -> list[dict[str, str]]:
     url = a.execute_url if a.type == "agentstudio" else a.url
     if url.startswith("http://"):
         add("warn", f"Agent '{agent.slug}' calls its backend over plain HTTP.")
-    if a.type in ("http_sync", "http_async") and a.auth.mode == "none":
+    if a.type in ("http_sync", "http_async", "openai_chat", "mcp") and a.auth.mode == "none":
         add("info", f"Agent '{agent.slug}' sends no credentials to its backend.")
     return found
 
@@ -169,7 +173,13 @@ def build_graph(config: AppConfig, mounted: set[str]) -> dict[str, Any]:
         node(f"agent:{agent.slug}", "agent", agent.name, sub, slug=agent.slug, skills=[s.name for s in agent.skills], live=live, adapter=info)
         edge("proxy", f"agent:{agent.slug}", f"/agents/{agent.slug}")
         backend = f"backend:{agent.slug}"
-        label = {"agentstudio": "Boomi Agentstudio", "http_async": "Async job API", "http_sync": "REST / Boomi listener"}[info["type"]]
+        label = {
+            "agentstudio": "Boomi Agentstudio",
+            "http_async": "Async job API",
+            "http_sync": "REST / Boomi listener",
+            "openai_chat": "Chat model endpoint",
+            "mcp": "MCP server",
+        }[info["type"]]
         node(backend, "backend", label, info["target"] or "", **info)
         edge(f"agent:{agent.slug}", backend, info["type"])
     for remote in config.remote_agents:

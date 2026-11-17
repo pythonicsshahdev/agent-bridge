@@ -92,6 +92,10 @@ def _adapter_text(agent: AgentConfig) -> tuple[str, str, str]:
         return "\U0001f9e0", "Boomi Agentstudio", f"Calls the deployed agent through the Execute API using {who}. A2A conversations map to Boomi sessions."
     if a.type == "http_async":
         return "⏳", "Async job", "Starts a downstream job, polls its status, reports progress, and can cancel it."
+    if a.type == "openai_chat":
+        return "\U0001f4ac", "Chat model", "Sends the conversation to an OpenAI-compatible endpoint and keeps the history per A2A context."
+    if a.type == "mcp":
+        return "\U0001f527", "MCP tools", "Calls an allow-listed tool on an MCP server and maps the result back."
     return "⚡", "REST call", "Turns the A2A message into one HTTP call and maps the answer or error back."
 
 

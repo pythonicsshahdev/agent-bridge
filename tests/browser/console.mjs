@@ -33,7 +33,7 @@ ok('credential kept only in sessionStorage', await page.evaluate(() => !localSto
 // ---- flow
 await sleep(500);
 const nodes = await page.$$eval('.node', (n) => n.map((x) => x.getAttribute('data-node')));
-ok('flow map has every node', nodes.length === 10, nodes.join(','));
+ok('flow map has every node', nodes.length === 14, nodes.join(','));
 const kinds = await page.$$eval('.node', (n) => [...new Set(n.map((x) => x.getAttribute('class').split(' ')[1]))].sort().join(','));
 ok('all node kinds drawn', kinds === 'node--agent,node--backend,node--caller,node--proxy,node--remote', kinds);
 ok('findings are listed', (await page.$$('.finding')).length >= 3);

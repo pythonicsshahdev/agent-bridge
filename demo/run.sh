@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PY=python3; [ -x .venv/bin/python ] && PY=.venv/bin/python
-for port in 8013 9013; do
+for port in 8013 9013 9014 9015; do
   if curl -s -o /dev/null "http://127.0.0.1:$port/"; then echo "Port $port is already in use. Stop the other process first." >&2; exit 1; fi
 done
 rm -f demo/demo.db
@@ -14,6 +14,8 @@ cleanup() { for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done; rm -f
 trap cleanup EXIT INT TERM
 
 "$PY" -m uvicorn --app-dir tests/mocks boomi_listener:app --host 127.0.0.1 --port 9013 --log-level warning & pids+=($!)
+"$PY" -m uvicorn --app-dir tests/mocks openai_chat:app --host 127.0.0.1 --port 9014 --log-level warning & pids+=($!)
+"$PY" -m uvicorn --app-dir tests/mocks mcp_server:app --host 127.0.0.1 --port 9015 --log-level warning & pids+=($!)
 PYTHONPATH=src "$PY" -m a2a_bridge.main --config demo/agents.demo.yaml >demo/proxy.log 2>&1 & pids+=($!)
 for _ in $(seq 1 30); do curl -sf http://127.0.0.1:8013/readyz >/dev/null 2>&1 && break; sleep 1; done
 curl -sf http://127.0.0.1:8013/readyz >/dev/null || { echo "The proxy did not start; see demo/proxy.log" >&2; exit 1; }
@@ -23,6 +25,8 @@ for i in 1 2 3 4; do call orders demo-crm-key '{"data":{"sku":"A'$i'","qty":2}}'
 call orders demo-billing-key '{"data":{"sku":"B1","qty":1}}'
 call export demo-crm-key '{"data":{"polls":2},"wait_seconds":5}'
 call orders wrong-key '{"message":"hi"}'
+call assistant demo-crm-key '{"message":"Hello, remember me?"}'
+call calc demo-crm-key '{"data":{"tool":"add","arguments":{"a":40,"b":2}}}'
 call export demo-billing-key '{"message":"hi"}'   # billing-bot may only call orders: refused
 
 cat <<MSG

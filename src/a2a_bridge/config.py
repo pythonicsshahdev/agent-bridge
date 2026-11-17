@@ -284,8 +284,57 @@ class AgentstudioAdapterConfig(_Model):
         return self
 
 
+class OpenAIChatAdapterConfig(_Model):
+    """Any OpenAI-compatible chat endpoint (LiteLLM, Ollama, vLLM, LangGraph servers, hosted APIs).
+
+    The proxy keeps the running conversation per caller and A2A context and sends it with each turn.
+    It adds no prompts of its own: the system prompt belongs to the service behind the endpoint.
+    """
+
+    type: Literal["openai_chat"]
+    url: str  # base URL ending in /v1, or the full .../chat/completions URL
+    model: str = Field(min_length=1)
+    timeout_seconds: float = Field(120, gt=0, le=900)
+    headers: dict[str, str] = Field(default_factory=dict)
+    auth: AuthConfig = Field(default_factory=AuthConfig)
+    parameters: dict[str, Any] = Field(default_factory=dict)  # passed through, e.g. temperature, max_tokens
+    max_history_messages: int = Field(20, ge=0, le=200)  # 0 = every turn stands alone
+
+    _url = field_validator("url")(lambda cls, v: _check_http_url(v))
+
+    @field_validator("parameters")
+    @classmethod
+    def _no_reserved(cls, v: dict[str, Any]) -> dict[str, Any]:
+        reserved = sorted({"messages", "model", "stream"} & set(v))
+        if reserved:
+            raise ValueError(f"{reserved} are set by the proxy and cannot be overridden here")
+        return v
+
+
+class McpAdapterConfig(_Model):
+    """An MCP server (streamable HTTP) exposed as an A2A agent. Only the tools listed here can be called."""
+
+    type: Literal["mcp"]
+    url: str  # the server's MCP endpoint
+    tools: list[str] = Field(min_length=1)  # allow-list; nothing else is callable
+    default_tool: str | None = None  # used when the message does not name a tool; optional with one tool
+    text_argument: str | None = None  # argument that receives the message text when there is no data part
+    timeout_seconds: float = Field(60, gt=0, le=600)
+    headers: dict[str, str] = Field(default_factory=dict)
+    auth: AuthConfig = Field(default_factory=AuthConfig)
+
+    _url = field_validator("url")(lambda cls, v: _check_http_url(v))
+
+    @model_validator(mode="after")
+    def _default_is_allowed(self) -> McpAdapterConfig:
+        if self.default_tool and self.default_tool not in self.tools:
+            raise ValueError("default_tool must be one of tools")
+        return self
+
+
 AdapterConfig = Annotated[
-    HttpSyncAdapterConfig | HttpAsyncAdapterConfig | AgentstudioAdapterConfig, Field(discriminator="type")
+    HttpSyncAdapterConfig | HttpAsyncAdapterConfig | AgentstudioAdapterConfig | OpenAIChatAdapterConfig | McpAdapterConfig,
+    Field(discriminator="type"),
 ]
 
 

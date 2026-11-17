@@ -37,6 +37,16 @@ agents:
     description: First-line IT support on Boomi Agentstudio (not called in this demo).
     adapter: {type: agentstudio, deployment_id: "11111111-1111-1111-1111-111111111111", execute_url: "https://c01-usa-east.ai-agent-garden.boomi.com", account_id: demo-account}
     skills: [{id: triage, name: Triage an IT issue, description: Diagnoses a problem and files a ticket.}]
+  - slug: assistant
+    name: Chat Assistant
+    description: Any OpenAI-compatible chat endpoint (here a bundled mock). The proxy keeps the conversation.
+    adapter: {type: openai_chat, url: "http://127.0.0.1:9014/v1", model: demo-model}
+    skills: [{id: chat, name: Chat, description: Answers and remembers the conversation.}]
+  - slug: calc
+    name: Calculator Tools
+    description: Three tools of an MCP server (a bundled mock); the server's other tools stay unreachable.
+    adapter: {type: mcp, url: "http://127.0.0.1:9015/mcp", tools: [add, echo, divide], text_argument: message}
+    skills: [{id: add, name: Add numbers, description: Adds two numbers with the add tool.}]
 remote_agents:
   - slug: partner-fulfilment
     card_url: "https://partner.example.com/agents/fulfilment/.well-known/agent-card.json"
