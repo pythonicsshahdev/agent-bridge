@@ -102,6 +102,32 @@ ok('the radios are in a labelled group', await page.$eval('fieldset.choice legen
 ok('the live status is announced politely', (await page.$eval('#pv-status', (e) => e.getAttribute('aria-live'))) === 'polite');
 
 // ---- no stray placeholder text on any page
+// ---- a service that expects its own body (LangServe, CrewAI, ...)
+await page.click('input[name=f-type][value=http_sync]'); await sleep(200);
+await set('.skill-row input', 'Ask the chain');
+await page.evaluate(() => { document.querySelector('#f-s-template').closest('details').open = true; });
+await page.$eval('#f-s-template', (e) => { e.value = '{"input": "{{text}}", "config": {"configurable": {"thread_id": "{{context_id}}"}}}'; e.dispatchEvent(new Event('input', { bubbles: true })); });
+await page.type('#f-s-textpath', 'output.content'); await settle();
+y = await yamlText();
+ok('a body template and reply path appear in the yaml', y.includes('request_template') && y.includes('thread_id') && y.includes('response_text_path: output.content'), (await status()) + ' | ' + (await page.$$eval('.result__list li', (l) => l.map((x) => x.textContent).join(' ; '))) + ' | ' + y.slice(0, 60));
+await page.$eval('#f-s-template', (e) => { e.value = '{"input": '; e.dispatchEvent(new Event('input', { bubbles: true })); }); await settle();
+ok('a template that is not JSON is explained and blocks copy', (await status()).includes('not valid JSON') && await page.$eval('.builder__out .button', (e) => e.disabled), await status());
+await page.$eval('#f-s-template', (e) => { e.value = '{"input": "{{prompt}}"}'; e.dispatchEvent(new Event('input', { bubbles: true })); }); await settle();
+ok('an unknown placeholder is reported by the server', (await page.$$eval('.result__list li', (l) => l.some((x) => x.textContent.includes('prompt')))), await status());
+
+// ---- an agent that already speaks A2A
+await page.click('input[name=f-type][value=remote]'); await sleep(200);
+ok('skills and description hide for a remote agent', !(await page.$eval('#skills-label', (e) => e.offsetParent !== null)) && !(await page.$eval('#f-desc', (e) => e.offsetParent !== null)));
+await set('#f-slug', 'partner-crew');
+await page.type('#f-r-card', 'https://crew.example.com/.well-known/agent-card.json');
+await pick('#f-r-auth', 'oauth_client_credentials');
+ok('OAuth fields appear', await page.$eval('#f-r-token', (e) => e.offsetParent !== null));
+await page.type('#f-r-token', 'https://login.example.com/oauth/token'); await page.type('#f-r-cid', 'bridge'); await page.type('#f-r-secret', 'CREW_SECRET'); await settle();
+y = await yamlText();
+ok('a remote agent produces a remote_agents entry', (await status()).startsWith('Valid') && y.includes('card_url: https://crew.example.com') && y.includes('${CREW_SECRET}') && !y.includes('skills'), await status() + ' | ' + y.slice(0, 60));
+ok('the steps say to add it under remote_agents', (await page.evaluate(() => document.querySelector('.steps').innerText)).includes('remote_agents:'));
+await page.screenshot({ path: `${SHOTS}/add-3-remote.png`, fullPage: true });
+
 const stray = [];
 for (const view of ['flow', 'agents', 'add', 'access', 'traffic', 'check']) {
   await page.click(`[data-view=${view}]`); await sleep(500);

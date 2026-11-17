@@ -541,18 +541,32 @@ function viewAdd() {
   addSkill();
 
   const typeRadios = el('fieldset', { class: 'choice' }, el('legend', { text: 'What does this agent run on?' }),
-    [['http_sync', 'A REST call', 'One HTTP request, answered straight away.'], ['http_async', 'A long-running job', 'Start it, then check on it until it finishes.'], ['agentstudio', 'A Boomi Agentstudio agent', 'A deployed Boomi agent, including multi-turn conversations.']]
+    [['http_sync', 'A REST call', 'One HTTP request, answered straight away.'], ['http_async', 'A long-running job', 'Start it, then check on it until it finishes.'], ['agentstudio', 'A Boomi Agentstudio agent', 'A deployed Boomi agent, including multi-turn conversations.'], ['remote', 'An agent that already speaks A2A', 'Google ADK, LangGraph, CrewAI, another a2a-bridge, or any A2A server. Reached through the REST facade.']]
       .map(([v, t, h], i) => el('label', { class: 'choice__item' }, el('input', { type: 'radio', name: 'f-type', value: v, checked: i === 0 }), el('span', {}, el('strong', { text: t }), el('span', { class: 'field__hint', text: h })))));
 
   form.append(
     field('name', 'Name', input('name', { placeholder: 'Invoice lookup', required: true })),
     field('slug', 'Address name (slug)', input('slug', { placeholder: 'invoice-lookup', class: 'input input--code' }), 'Used in the address: /agents/<slug>. Lowercase letters, numbers and hyphens.'),
-    field('desc', 'Description', input('desc', { placeholder: 'What this agent does, in one sentence' })),
+    el('div', { 'data-hide-for': 'remote' }, field('desc', 'Description', input('desc', { placeholder: 'What this agent does, in one sentence' }))),
     typeRadios,
     group('http_sync',
       field('s-url', 'Backend address', input('s-url', { placeholder: 'https://erp.example.com/invoices', type: 'url' })),
       field('s-method', 'HTTP method', select('s-method', ['POST', 'GET', 'PUT', 'PATCH', 'DELETE'].map((m) => [m, m]), 'POST')),
-      authFields('s')),
+      authFields('s'),
+      el('details', { class: 'details' }, el('summary', { text: 'My service expects a specific body (LangServe, CrewAI, n8n, …)' }), el('div', { class: 'details__body' },
+        field('s-template', 'Request body', el('textarea', { class: 'input input--code', id: id('s-template'), rows: '5', spellcheck: 'false', placeholder: '{"input": "{{text}}", "config": {"configurable": {"thread_id": "{{context_id}}"}}}' }), 'JSON. Fill in {{text}}, {{context_id}}, {{task_id}} or {{data}}. Leave empty to send the message as it is.'),
+        field('s-textpath', 'Where the reply text is in the response', input('s-textpath', { placeholder: 'output', class: 'input input--code' }), 'A dotted path such as output.content. Leave empty to return the whole response.')))),
+    group('remote',
+      field('r-card', 'Agent card address', input('r-card', { placeholder: 'https://agent.example.com/.well-known/agent-card.json', type: 'url' }), 'Must be https unless you are testing locally.'),
+      field('r-auth', 'Credentials sent to that agent', select('r-auth', [['none', 'None'], ['bearer_passthrough', "Forward the caller's bearer token"], ['static_header', 'A fixed header from an environment variable'], ['oauth_client_credentials', 'OAuth client credentials']], 'none')),
+      el('div', { class: 'group', 'data-rauth': 'static_header', hidden: true },
+        field('r-header', 'Header name', input('r-header', { value: 'Authorization' })),
+        field('r-env', 'Environment variable holding the value', input('r-env', { placeholder: 'REMOTE_AGENT_KEY', class: 'input input--code' }), 'Only the variable name goes in the file, never the secret.')),
+      el('div', { class: 'group', 'data-rauth': 'oauth_client_credentials', hidden: true },
+        field('r-token', 'Token address', input('r-token', { placeholder: 'https://login.example.com/oauth/token', type: 'url' })),
+        field('r-cid', 'Client id', input('r-cid', { class: 'input input--code' })),
+        field('r-secret', 'Environment variable holding the client secret', input('r-secret', { placeholder: 'REMOTE_CLIENT_SECRET', class: 'input input--code' }), 'Only the variable name goes in the file.'),
+        field('r-scope', 'Scope (optional)', input('r-scope')))),
     group('http_async',
       field('a-url', 'Address that starts the job', input('a-url', { placeholder: 'https://boomi.example.com/ws/rest/export/start', type: 'url' })),
       field('a-status', 'Address that reports status', input('a-status', { placeholder: 'https://boomi.example.com/ws/rest/export/status/{job_id}', class: 'input input--code' }), 'Must contain {job_id}.'),
@@ -577,7 +591,7 @@ function viewAdd() {
         field('g-user', 'Environment variable holding the Boomi username', input('g-user', { placeholder: 'BOOMI_USERNAME', class: 'input input--code' })),
         field('g-token', 'Environment variable holding the API token', input('g-token', { placeholder: 'BOOMI_API_TOKEN', class: 'input input--code' }), 'Only the variable name goes in the file.')),
       field('g-blocked', "The agent's guardrail message (optional)", input('g-blocked', { placeholder: "I can't help with that request." }), 'When the agent replies with exactly this, the task is reported as rejected.')),
-    el('div', { class: 'field' }, el('span', { class: 'field__label', id: 'skills-label', text: 'Skills' }), el('span', { class: 'field__hint', text: 'What callers can ask this agent for. Add at least one.' }), skills,
+    el('div', { class: 'field', 'data-hide-for': 'remote' }, el('span', { class: 'field__label', id: 'skills-label', text: 'Skills' }), el('span', { class: 'field__hint', text: 'What callers can ask this agent for. Add at least one.' }), skills,
       el('button', { class: 'button button--quiet', type: 'button', text: 'Add a skill', onclick: () => { addSkill(); schedule(); } })));
 
   const val = (n) => (document.getElementById(id(n)) || { value: '' }).value.trim();
@@ -586,14 +600,32 @@ function viewAdd() {
     if (mode === 'static_header') return { mode, header_name: val(p + '-header') || 'X-API-Key', value: ENV_NAME.test(val(p + '-env')) ? '${' + val(p + '-env') + '}' : '' };
     return { mode };
   };
+  let localProblem = '';
   const list = (t) => t.split(',').map((x) => x.trim()).filter(Boolean);
   function collect() {
     const type = form.querySelector('input[name=f-type]:checked').value;
+    localProblem = '';
+    if (type === 'remote') {
+      const mode = val('r-auth');
+      const auth = { mode };
+      if (mode === 'static_header') { auth.header_name = val('r-header') || 'Authorization'; auth.value = ENV_NAME.test(val('r-env')) ? '${' + val('r-env') + '}' : ''; }
+      if (mode === 'oauth_client_credentials') {
+        Object.assign(auth, { token_url: val('r-token'), client_id: val('r-cid'), client_secret: ENV_NAME.test(val('r-secret')) ? '${' + val('r-secret') + '}' : '' });
+        if (val('r-scope')) auth.scope = val('r-scope');
+      }
+      const remote = { slug: val('slug'), card_url: val('r-card'), auth };
+      if (remote.card_url.startsWith('http://')) remote.allow_insecure_http = true;
+      return { remote };
+    }
     const agent = { slug: val('slug'), name: val('name') };
     if (val('desc')) agent.description = val('desc');
     let adapter;
     if (type === 'http_sync') {
       adapter = { type, url: val('s-url'), method: val('s-method'), auth: authOf('s') };
+      if (val('s-template')) {
+        try { adapter.request_template = JSON.parse(val('s-template')); } catch { localProblem = 'The request body is not valid JSON.'; }
+      }
+      if (val('s-textpath')) adapter.response_text_path = val('s-textpath');
     } else if (type === 'http_async') {
       adapter = { type, url: val('a-url'), status_url: val('a-status'), job_id_path: val('a-jobpath') || 'executionId', status_path: val('a-statuspath') || 'status', completed_values: list(val('a-done')), failed_values: list(val('a-fail')), poll_interval_seconds: Number(val('a-poll')) || 2, max_poll_seconds: Number(val('a-max')) || 300, auth: authOf('a') };
       if (val('a-result')) adapter.result_path = val('a-result');
@@ -621,7 +653,7 @@ function viewAdd() {
       if (d.value.trim()) skill.description = d.value.trim();
       return skill;
     }).filter((sk) => sk.name);
-    return agent;
+    return { agent };
   }
 
   const status = el('p', { class: 'status-line', id: 'pv-status', 'aria-live': 'polite', text: 'Fill in the form and the configuration appears here.' });
@@ -641,11 +673,13 @@ function viewAdd() {
   const schedule = () => { clearTimeout(timer); timer = setTimeout(check, 350); };
   async function check() {
     const mine = ++ticket;
-    const agent = collect();
-    if (!agent.name && !agent.slug) { status.textContent = 'Fill in the form and the configuration appears here.'; yamlBox.textContent = ''; details.replaceChildren(); latest = null; copy.disabled = save.disabled = true; return; }
+    const { agent, remote } = collect();
+    const named = remote ? remote.slug : (agent.name || agent.slug);
+    if (!named) { status.textContent = 'Fill in the form and the configuration appears here.'; yamlBox.textContent = ''; details.replaceChildren(); latest = null; copy.disabled = save.disabled = true; return; }
+    if (localProblem) { status.textContent = localProblem; yamlBox.textContent = ''; details.replaceChildren(); latest = null; copy.disabled = save.disabled = true; return; }
     status.textContent = 'Checking…';
     let r;
-    try { r = await api('agent/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agent }) }); }
+    try { r = await api('agent/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(remote ? { remote_agent: remote } : { agent }) }); }
     catch (e) { if (mine === ticket) status.textContent = e instanceof AuthProblem ? 'Your session ended. Sign in again.' : 'Could not check: ' + e.message; return; }
     if (mine !== ticket) return;  // a newer edit is already being checked
     const parts = [];
@@ -664,7 +698,7 @@ function viewAdd() {
       const cmd = `a2a-bridge tool-spec --config agents.yaml --agent ${r.slug} --out tools/`;
       parts.push(el('section', {}, el('h3', { text: 'To use it' }),
         el('ol', { class: 'steps' },
-          el('li', { text: 'Add the configuration above under agents: in your agents.yaml.' }),
+          el('li', { text: (r.kind === 'remote_agent' ? 'Add the configuration above under remote_agents: in your agents.yaml.' : 'Add the configuration above under agents: in your agents.yaml.') }),
           el('li', {}, 'Give each client that should call it the scope ', el('code', { text: 'agents:' + r.slug }), '.'),
           el('li', { text: 'Restart or redeploy the proxy.' }),
           el('li', {}, 'Optional: make it a tool for Boomi agents with ', el('code', { text: cmd }), '.'))));
@@ -678,6 +712,8 @@ function viewAdd() {
     for (const g of form.querySelectorAll('[data-auth]')) g.hidden = val(g.dataset.auth + '-auth') !== 'static_header';
     const region = document.getElementById(id('g-region'));
     for (const g of form.querySelectorAll('[data-region]')) g.hidden = !(region && region.value === 'custom');
+    for (const g of form.querySelectorAll('[data-hide-for]')) g.hidden = g.dataset.hideFor === type;
+    for (const g of form.querySelectorAll('[data-rauth]')) g.hidden = val('r-auth') !== g.dataset.rauth;
     for (const g of form.querySelectorAll('[data-identity]')) g.hidden = val('g-identity') === 'caller';
   };
   form.addEventListener('input', (e) => {

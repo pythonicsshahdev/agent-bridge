@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
 import httpx
 
 from a2a_bridge.adapters.base import AdapterResult, AdapterState, BaseAdapter, TaskContext
+from a2a_bridge.adapters.templating import _MISSING, get_path, render_template
 from a2a_bridge.config import HttpSyncAdapterConfig
 
 logger = logging.getLogger(__name__)
@@ -30,8 +32,10 @@ def build_headers(config: HttpSyncAdapterConfig | Any, context: TaskContext) -> 
     return headers, None
 
 
-def build_payload(context: TaskContext) -> Any:
-    """A single structured data part is sent as-is; anything else goes in a small envelope."""
+def build_payload(context: TaskContext, template: Any | None = None) -> Any:
+    """A template, when configured, shapes the body. Otherwise a lone data part is sent as-is, else a small envelope."""
+    if template is not None:
+        return render_template(template, context)
     if len(context.data) == 1 and isinstance(context.data[0], dict) and not context.text:
         return context.data[0]
     return {
@@ -42,13 +46,24 @@ def build_payload(context: TaskContext) -> Any:
     }
 
 
-def map_response(response: httpx.Response) -> AdapterResult:
+def map_response(
+    response: httpx.Response, text_path: str | None = None, data_path: str | None = None
+) -> AdapterResult:
     status = response.status_code
     if 200 <= status < 300:
         if not response.content:
             return AdapterResult(state=AdapterState.COMPLETED)
         try:
-            return AdapterResult(state=AdapterState.COMPLETED, data=response.json())
+            body = response.json()
+            if text_path or data_path:
+                text = get_path(body, text_path) if text_path else _MISSING
+                data = get_path(body, data_path) if data_path else (body if text is _MISSING else _MISSING)
+                return AdapterResult(
+                    state=AdapterState.COMPLETED,
+                    text=None if text is _MISSING else (text if isinstance(text, str) else json.dumps(text)),
+                    data=None if data is _MISSING else data,
+                )
+            return AdapterResult(state=AdapterState.COMPLETED, data=body)
         except ValueError:
             return AdapterResult(state=AdapterState.COMPLETED, text=response.text[:MAX_TEXT_CHARS])
     detail = response.text[:MAX_ERROR_CHARS].strip()
@@ -67,10 +82,14 @@ class HttpSyncAdapter(BaseAdapter):
         headers, missing = build_headers(self.config, context)
         if missing:
             return AdapterResult(state=AdapterState.AUTH_REQUIRED, error=missing)
-        payload = build_payload(context)
+        payload = build_payload(context, self.config.request_template)
         kwargs: dict[str, Any] = {"headers": headers, "timeout": self.config.timeout_seconds}
         if self.config.method in ("GET", "DELETE"):
-            kwargs["params"] = {"text": context.text} if context.text else None
+            tpl = self.config.request_template
+            if isinstance(payload, dict) and tpl is not None:
+                kwargs["params"] = payload
+            else:
+                kwargs["params"] = {"text": context.text} if context.text else None
         else:
             kwargs["json"] = payload
         try:
@@ -82,7 +101,7 @@ class HttpSyncAdapter(BaseAdapter):
         except httpx.HTTPError as exc:
             logger.warning("downstream call failed: %s", type(exc).__name__)
             return AdapterResult(state=AdapterState.FAILED, error="Downstream unreachable")
-        return map_response(response)
+        return map_response(response, self.config.response_text_path, self.config.response_data_path)
 
     async def aclose(self) -> None:
         await self._client.aclose()

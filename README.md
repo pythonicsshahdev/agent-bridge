@@ -62,6 +62,27 @@ Put the `https://...ngrok-free.app` URL in `server.public_base_url` and restart,
 
 A2A carries JSON numbers as doubles, so whole numbers in a **response** can read back as `2.0`. Numbers in **requests** are converted back to integers before they reach your backend.
 
+## LangChain, CrewAI, n8n and other frameworks
+
+Anything that serves HTTP can be an agent. If it expects its own body, shape it with `request_template` (works for `http_sync` and `http_async`) and pick the reply out with `response_text_path` / `response_data_path`:
+
+```yaml
+- slug: research-chain
+  name: Research chain
+  adapter:
+    type: http_sync
+    url: https://chains.example.com/research/invoke      # a LangServe route
+    request_template:
+      input: "{{text}}"
+      config: {configurable: {thread_id: "{{context_id}}"}}   # the A2A conversation becomes the thread
+    response_text_path: output.content
+  skills: [{id: research, name: Research a topic}]
+```
+
+Placeholders are `{{text}}`, `{{context_id}}`, `{{task_id}}`, `{{data}}` and `{{data.0.field}}`. A value that is exactly one placeholder keeps its type; inside longer text it becomes a string. A typo such as `{{txt}}` fails at startup. It is field mapping only: no logic, no conditionals. For a CrewAI-style start-then-poll service, use `http_async` with the same `request_template`.
+
+Frameworks that already speak A2A (Google ADK, recent LangGraph and CrewAI releases, another a2a-bridge) need no adapter. Register them under `remote_agents:` (the control plane's Add an agent page has an option for it) and call them through the same facade.
+
 ## Long-running jobs (`http_async`)
 
 For backends that start a job and return an id (a Boomi process behind a 202, an export, a batch), `adapter.type: http_async` starts the job, polls a status endpoint, and reports progress as A2A `working` updates. See the second agent in [`agents.example.yaml`](agents.example.yaml).

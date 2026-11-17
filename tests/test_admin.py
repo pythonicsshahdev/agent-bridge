@@ -422,3 +422,36 @@ def test_the_security_policy_still_allows_nothing_external(client):
     csp = client.get("/admin").headers["content-security-policy"]
     assert "font-src 'self'" in csp and "default-src 'none'" in csp
     assert "unsafe-inline" not in csp and "http" not in csp.replace("https:", "") and "*" not in csp
+
+
+def preview_remote(client, remote, headers=ADMIN):
+    return client.post("/admin/api/agent/preview", json={"remote_agent": remote}, headers=headers)
+
+
+def test_preview_a_remote_agent_renders_the_remote_agents_section(client):
+    body = preview_remote(client, {"slug": "partner", "card_url": "https://partner.example.com/.well-known/agent-card.json",
+                                   "auth": {"mode": "static_header", "header_name": "X-Key", "value": "${PARTNER_KEY}"}}).json()
+    assert body["ok"] and body["kind"] == "remote_agent" and body["slug"] == "partner"
+    assert "card_url: https://partner.example.com" in body["yaml"] and "preview-stand-in" not in body["yaml"]
+    assert body["env"] == [{"name": "PARTNER_KEY", "set": False}]
+
+
+def test_preview_a_remote_agent_reports_problems_without_echoing_secrets(client):
+    body = preview_remote(client, {"slug": "p", "card_url": "http://insecure.example.com/card.json",
+                                   "auth": {"mode": "static_header", "value": "literal-secret-123"}}).json()
+    assert body["ok"] is False
+    assert "literal-secret-123" not in json.dumps(body)
+
+
+def test_preview_a_remote_agent_flags_a_taken_slug_and_plain_http(client):
+    body = preview_remote(client, {"slug": "orders", "card_url": "http://localhost:9/card.json", "allow_insecure_http": True}).json()
+    assert body["ok"] and body["slug_taken"] is True
+    assert any("plain HTTP" in f["message"] for f in body["findings"])
+
+
+def test_preview_a_rest_agent_with_a_body_template(client):
+    agent = {**REST_AGENT, "adapter": {**REST_AGENT["adapter"], "request_template": {"input": "{{text}}"}, "response_text_path": "output"}}
+    assert preview(client, agent).json()["ok"] is True
+    agent["adapter"]["request_template"] = {"input": "{{prompt}}"}
+    body = preview(client, agent).json()
+    assert body["ok"] is False and any("prompt" in e for e in body["errors"])

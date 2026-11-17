@@ -12,26 +12,10 @@ import httpx
 
 from a2a_bridge.adapters.base import AdapterResult, AdapterState, BaseAdapter, TaskContext
 from a2a_bridge.adapters.http_sync import MAX_ERROR_CHARS, build_headers, build_payload
+from a2a_bridge.adapters.templating import _MISSING, get_path
 from a2a_bridge.config import HttpAsyncAdapterConfig
 
 logger = logging.getLogger(__name__)
-
-_MISSING = object()
-
-
-def get_path(value: Any, path: str | None) -> Any:
-    """Follow a dotted path through dicts and lists (`a.b.0.c`). Returns _MISSING if it does not resolve."""
-    if not path:
-        return value
-    for part in path.split("."):
-        if isinstance(value, dict) and part in value:
-            value = value[part]
-        elif isinstance(value, list) and part.isdigit() and int(part) < len(value):
-            value = value[int(part)]
-        else:
-            return _MISSING
-    return value
-
 
 def _failed(message: str) -> AdapterResult:
     return AdapterResult(state=AdapterState.FAILED, error=message)
@@ -66,7 +50,7 @@ class HttpAsyncAdapter(BaseAdapter):
             return
         try:
             trigger = await self._client.request(
-                cfg.method, cfg.url, json=build_payload(context), headers=headers, timeout=cfg.timeout_seconds
+                cfg.method, cfg.url, json=build_payload(context, cfg.request_template), headers=headers, timeout=cfg.timeout_seconds
             )
         except httpx.TimeoutException:
             yield _failed(f"Starting the job timed out after {cfg.timeout_seconds:g}s")

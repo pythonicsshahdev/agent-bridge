@@ -30,6 +30,31 @@ def _check_http_url(value: str) -> str:
     return value
 
 
+_TEMPLATE_PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\}\}")
+_TEMPLATE_ROOTS = ("text", "context_id", "task_id", "data")
+
+
+def _check_template(value: Any) -> Any:
+    """Reject placeholders the adapters cannot fill, so a typo fails at startup and not on the first call."""
+    unknown: set[str] = set()
+
+    def scan(node: Any) -> None:
+        if isinstance(node, str):
+            unknown.update(n for n in _TEMPLATE_PLACEHOLDER.findall(node) if n.split(".")[0] not in _TEMPLATE_ROOTS)
+        elif isinstance(node, dict):
+            for k, v in node.items():
+                scan(k)
+                scan(v)
+        elif isinstance(node, list):
+            for v in node:
+                scan(v)
+
+    scan(value)
+    if unknown:
+        raise ValueError(f"unknown placeholder(s) {sorted(unknown)}; use text, context_id, task_id, data")
+    return value
+
+
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 _SENSITIVE_HEADER = re.compile(r"authorization|api[-_]?key|token|secret|password|cookie", re.IGNORECASE)
 _SLUG_OR_STAR = re.compile(r"^(\*|[a-z0-9][a-z0-9-]*)$")
@@ -178,8 +203,14 @@ class HttpSyncAdapterConfig(_Model):
     timeout_seconds: float = Field(30, gt=0, le=600)
     headers: dict[str, str] = Field(default_factory=dict)
     auth: AuthConfig = Field(default_factory=AuthConfig)
+    # Optional body shape for frameworks that expect their own input (LangServe, CrewAI, n8n, ...).
+    # Placeholders: {{text}}, {{context_id}}, {{task_id}}, {{data}}, {{data.0.field}}.
+    request_template: Any | None = None
+    response_text_path: str | None = None  # dotted path to the reply text in a JSON response
+    response_data_path: str | None = None  # dotted path to a structured result; whole body if unset
 
     _url = field_validator("url")(lambda cls, v: _check_http_url(v))
+    _template = field_validator("request_template")(lambda cls, v: _check_template(v))
 
 
 class HttpAsyncAdapterConfig(_Model):
@@ -191,6 +222,7 @@ class HttpAsyncAdapterConfig(_Model):
     timeout_seconds: float = Field(30, gt=0, le=600)
     headers: dict[str, str] = Field(default_factory=dict)
     auth: AuthConfig = Field(default_factory=AuthConfig)
+    request_template: Any | None = None  # same placeholders as http_sync
     job_id_path: str = "job_id"  # dotted path into the trigger response body
     status_url: str  # must contain {job_id}
     status_method: Literal["GET", "POST"] = "GET"
@@ -205,6 +237,7 @@ class HttpAsyncAdapterConfig(_Model):
     poll_interval_seconds: float = Field(2.0, gt=0)
     max_poll_seconds: float = Field(300.0, gt=0)
 
+    _template = field_validator("request_template")(lambda cls, v: _check_template(v))
     _url = field_validator("url", "status_url", "cancel_url")(lambda cls, v: v if v is None else _check_http_url(v))
 
     @field_validator("status_url", "cancel_url")

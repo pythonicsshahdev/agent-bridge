@@ -91,29 +91,39 @@ _ENV_NAME = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}")
 MAX_AGENT_BYTES = 64 * 1024
 
 
-def preview_agent(candidate: Any, config: AppConfig) -> dict[str, Any]:
-    """Check one agent definition and render it as YAML. Reports which ${ENV} names are set where this proxy
-    runs (true/false only, never values), because the agent may be deployed somewhere else."""
+def preview_agent(candidate: Any, config: AppConfig, remote: bool = False) -> dict[str, Any]:
+    """Check one agent (or remote agent) definition and render it as YAML. Reports which ${ENV} names are set
+    where this proxy runs (true/false only, never values), because the agent may be deployed somewhere else."""
     if not isinstance(candidate, dict):
         return {"ok": False, "errors": ["the agent must be an object"]}
-    text = yaml.safe_dump({"agents": [candidate]}, sort_keys=False, default_flow_style=False, allow_unicode=True)
+    section = "remote_agents" if remote else "agents"
+    text = yaml.safe_dump({section: [candidate]}, sort_keys=False, default_flow_style=False, allow_unicode=True)
+    if remote:  # a config needs at least one local agent to parse; this stand-in is never shown or returned
+        text += "agents:\n- {slug: preview-stand-in, name: x, adapter: {type: http_sync, url: 'https://x.test'}, skills: [{id: s, name: s}]}\n"
     names = sorted(set(_ENV_NAME.findall(text)))
     # Unset variables must not fail the check: this proxy is not necessarily where the agent will run.
     env = {**os.environ, **{n: "placeholder" for n in names if n not in os.environ}}
     try:
         parsed = parse_config(text, env)
     except ConfigError as exc:
-        return {"ok": False, "errors": [line.removeprefix("agents.0.") for line in str(exc).split("; ") if line]}
-    agent = parsed.agents[0]
+        return {"ok": False, "errors": [line.removeprefix(f"{section}.0.") for line in str(exc).split("; ") if line]}
     rendered = yaml.safe_dump([candidate], sort_keys=False, default_flow_style=False, allow_unicode=True)
-    return {
+    taken = {a.slug for a in config.agents} | {r.slug for r in config.remote_agents}
+    base = {
         "ok": True,
         "yaml": rendered,
-        "slug": agent.slug,
-        "slug_taken": any(a.slug == agent.slug for a in config.agents) or any(r.slug == agent.slug for r in config.remote_agents),
         "env": [{"name": n, "set": n in os.environ} for n in names],
-        "findings": lint_agent(agent),
     }
+    if remote:
+        entry = parsed.remote_agents[0]
+        findings = []
+        if entry.allow_insecure_http:
+            findings.append({"level": "warn", "message": f"Remote agent '{entry.slug}' is reached over plain HTTP."})
+        if entry.auth.mode == "none":
+            findings.append({"level": "info", "message": f"Remote agent '{entry.slug}' is called without credentials."})
+        return {**base, "kind": "remote_agent", "slug": entry.slug, "slug_taken": entry.slug in taken, "findings": findings}
+    agent = parsed.agents[0]
+    return {**base, "kind": "agent", "slug": agent.slug, "slug_taken": agent.slug in taken, "findings": lint_agent(agent)}
 
 
 def build_admin_routes(config: AppConfig, mounted: set[str], events: EventBuffer) -> list[Route]:
@@ -178,10 +188,12 @@ def build_admin_routes(config: AppConfig, mounted: set[str], events: EventBuffer
         if len(body) > MAX_AGENT_BYTES:
             return JSONResponse({"error": "agent definition too large"}, status_code=413)
         try:
-            candidate = json.loads(body)["agent"]
+            payload = json.loads(body)
+            remote = "remote_agent" in payload
+            candidate = payload["remote_agent" if remote else "agent"]
         except (ValueError, KeyError, TypeError):
-            return JSONResponse({"error": 'send {"agent": {...}}'}, status_code=422)
-        return api(preview_agent(candidate, config))
+            return JSONResponse({"error": 'send {"agent": {...}} or {"remote_agent": {...}}'}, status_code=422)
+        return api(preview_agent(candidate, config, remote=remote))
 
     async def font(request: Request) -> Response:
         name = request.path_params["name"]
